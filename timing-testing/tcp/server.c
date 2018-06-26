@@ -63,11 +63,17 @@ int main(){
         criu_set_log_level(4);
 
         criu_dump();
+
+        printf("...restored.\n");
         
 
         char buffer[4096];
         int n;
+
+        printf("Recving data...");
         n = recv(sock, buffer, 4096, 0);
+        printf(" ...data recved\n");
+
         if ( n < 0 ) {
             printf("Could not read data from socket.\n");
             return 1;
@@ -76,7 +82,9 @@ int main(){
         } else {
             memset(buffer, 0, 4096);
             snprintf(buffer, 4096, "%ld", time(NULL));
+            printf("Sending data...");
             send(sock, buffer, n, 0);
+            printf(" ...data sent.\n");
         }
 
         close(sock);

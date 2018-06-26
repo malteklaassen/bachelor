@@ -43,11 +43,17 @@ int main(){
 
     criu_dump();
 
+    printf("...restored.\n");
 
     char buffer[4096] = "This is some data to be send to the server.\n";
-    send(sock, buffer, strlen(buffer), 0);
 
+    printf("Sending data...");
+    send(sock, buffer, strlen(buffer), 0);
+    printf(" ... data sent.\n");
+
+    printf("Recving data...");
     int n = recv(sock, buffer, 4096, 0);
+    printf(" ... data recved\n");
     if ( n < 0 ) {
         printf("Could not read data from socket.\n");
             return 1;
