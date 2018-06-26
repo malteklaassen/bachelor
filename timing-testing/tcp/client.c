@@ -47,11 +47,11 @@ int main(){
 
     char buffer[4096] = "This is some data to be send to the server.\n";
 
-    printf("Sending data...");
+    printf("Sending data...\n");
     send(sock, buffer, strlen(buffer), 0);
     printf(" ... data sent.\n");
 
-    printf("Recving data...");
+    printf("Recving data...\n");
     int n = recv(sock, buffer, 4096, 0);
     printf(" ... data recved\n");
     if ( n < 0 ) {
@@ -61,6 +61,7 @@ int main(){
         printf("EOF.\n");
     } else {
         write(STDOUT_FILENO, buffer, n);
+	printf("\n");
     }
     close(sock);
     return 0;

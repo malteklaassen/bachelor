@@ -70,7 +70,7 @@ int main(){
         char buffer[4096];
         int n;
 
-        printf("Recving data...");
+        printf("Recving data...\n");
         n = recv(sock, buffer, 4096, 0);
         printf(" ...data recved\n");
 
@@ -82,7 +82,7 @@ int main(){
         } else {
             memset(buffer, 0, 4096);
             snprintf(buffer, 4096, "%ld", time(NULL));
-            printf("Sending data...");
+            printf("Sending data...\n");
             send(sock, buffer, n, 0);
             printf(" ...data sent.\n");
         }
