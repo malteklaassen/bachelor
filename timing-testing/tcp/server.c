@@ -10,13 +10,16 @@
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <time.h>
+#include <stdlib.h>
 
 #include <criu/criu.h>
 
-int SERVER_PORT = 8080;
+int SERVER_PORT;
 
-int main(){
+int main(int argc, char* argv[]){
     criu_init_opts();
+
+    SERVER_PORT = atoi(argv[1]);
 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
@@ -27,19 +30,19 @@ int main(){
 
     int listen_sock;
     if ( (listen_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        printf("Could not create listen socket.\n");
+        printf("Server: Could not create listen socket.\n");
         return 1;
     }
 
     if ( (bind(listen_sock, (struct sockaddr *)&server_addr, sizeof(server_addr))) < 0 ) {
-        printf("Could not bind listen socket.\n");
+        printf("Server: Could not bind listen socket.\n");
         return 1;
     }
 
     int wait_size = 1;
 
     if ( listen(listen_sock, wait_size) < 0 ) {
-        printf("Could not open socket for listening.\n");
+        printf("Server: Could not open socket for listening.\n");
         return 1;
     }
 
@@ -49,42 +52,42 @@ int main(){
     //while ( 1 ) {
         int sock;
         if ( ( sock = accept(listen_sock, (struct sockaddr*) &client_addr, &client_addr_len)) < 0 ) {
-            printf("Could not open accept socket.\n");
+            printf("Server: Could not open accept socket.\n");
             return 1;
         }
 
-        printf("Client connected with addr %s.\n", inet_ntoa(client_addr.sin_addr));
+        printf("Server: Client connected with addr %s.\n", inet_ntoa(client_addr.sin_addr));
         
         int dir = open("/tmp/criu/server/", O_DIRECTORY);
         criu_set_tcp_established(true);
         criu_set_images_dir_fd(dir);
         criu_set_shell_job(true);
         criu_set_log_file("server.log");
-        criu_set_log_level(4);
+        //criu_set_log_level(4);
 
         criu_dump();
 
-        printf("...restored.\n");
+        printf("Server: ...restored.\n");
         
 
         char buffer[4096];
         int n;
 
-        printf("Recving data...\n");
+        printf("Server: Recving data...\n");
         n = recv(sock, buffer, 4096, 0);
-        printf(" ...data recved\n");
+        printf("Server:  ...data recved\n");
 
         if ( n < 0 ) {
-            printf("Could not read data from socket.\n");
+            printf("Server: Could not read data from socket.\n");
             return 1;
         } else if ( n == 0 ) {
-            printf("EOF.\n");
+            printf("Server: EOF.\n");
         } else {
             memset(buffer, 0, 4096);
             snprintf(buffer, 4096, "%ld", time(NULL));
-            printf("Sending data...\n");
+            printf("Server: Sending data...\n");
             send(sock, buffer, n, 0);
-            printf(" ...data sent.\n");
+            printf("Server:  ...data sent.\n");
         }
 
         close(sock);
