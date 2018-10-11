@@ -3,6 +3,9 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
+// First argument: port
+// Second argument: number of iterations
+
 int main(int argc, char* argv[]){
     //fork, start & dump the processes
     int serverpid, clientpid;
@@ -48,8 +51,9 @@ int main(int argc, char* argv[]){
     sprintf(iptables4, "iptables -A INPUT -s 127.0.0.1/32 -d 127.0.0.1/32 -p tcp -m mark ! --mark 0xc114 -m tcp --sport %i --dport %i -j DROP", serverport, clientport);
 
 
+    int iterations = atoi(argv[2]);
     // restore $ITERATIONS times
-    for(int i = 0; i < 200; i++){
+    for(int i = 0; i < iterations; i++){
         printf("Iteration: %i\n", i);
         serverpid = 0, clientpid = 0;
         
