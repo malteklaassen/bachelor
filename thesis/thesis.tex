@@ -2,6 +2,8 @@
 
 \usepackage[ngerman]{babel}
 \usepackage{lmodern}
+\usepackage{listings}
+\usepackage{color}
 
 \usepackage[utf8]{inputenc}
 
@@ -37,6 +39,8 @@ Leider sind nicht immer alle diese Methoden anwendbar und haben jeweils ihre eig
 
 \subsection{Fuzzing}
 
+TODO: Corpus, Seeds, Dictionaries
+
 Fuzzing ist eine Test-Methode die teil-automatisiert versucht genau diese Art von mit klassischen Test-Methoden schwer abzudeckenden Fällen umfassend zu erkennen indem, statt wie im klassischen Testing nur in von Menschen mehr oder weniger präzise beschriebenen Testfällen getestet wird, ein Codestück, das so genannte Fuzz-Target, wiederholt mit computergenerierten zufälligen Inputs getestet wird, dabei wird die Ausführung genau von Fuzzer überwacht um beispielsweise Programmabstürze, das Lesen aus unitialisiertem Speicher oder auch undefiniertes Verhalten zu Erkennen und zu der problematischen Codestelle zurück zu verfolgen.
 
 \subsection{Klassifizierung von Fuzzern}
@@ -48,22 +52,52 @@ Fuzzer werden anhand mehrerer Eigenschaften unterschieden, insbesondere ob sie s
 Die meisten modernen Fuzzer können sowohl als Black- als auch als Gray- beziehungsweise White-Box-Fuzzer und sowohl als Smart als auch als Dumb Fuzzer agieren, diese Terme werden zumeist auch zur Beschreibung von Operationsmodi ebensolcher moderner Fuzzer verwendet.
 
 \subsection{Historischer Überblick}
-Testing mit randomisierten Inputs ist kein sonderlicher neuer Ansatz, jedoch ist die Effizienz von naivem Random Input Test (also Black-Box-Fuzzing) offensichtlich beschränkt und der größte Teil der Fehler die dauf diese Art und Weise gefunden werden können relativ simpel und selten in den Tiefen des Programmes versteckt, d.h. es handelt sich zumeist um Fehler die vergleichsweise simpel auch durch Code-Reviews oder klassische Tests gefunden werden könnten, entsprechenden hatte Random Input Testing für recht lange Zeit nur eine relativ geringe Relevanz, sowohl in der Qualitätssicherung als auch in der Sicherheitsforschung.\\
+Testing mit randomisierten Inputs ist kein sonderlicher neuer Ansatz, jedoch ist die Effizienz von naivem Random Input Test (also Black-Box-Fuzzing) offensichtlich beschränkt und der größte Teil der Fehler die dauf diese Art und Weise gefunden werden können relativ simpel und selten in den Tiefen des Programmes versteckt, das heißt es handelt sich zumeist um Fehler die vergleichsweise simpel auch durch Code-Reviews oder klassische Tests gefunden werden könnten, entsprechenden hatte Random Input Testing für recht lange Zeit nur eine relativ geringe Relevanz, sowohl in der Qualitätssicherung als auch in der Sicherheitsforschung.\\
 Mit dem Aufkommen von effizienteren Gray- und White-Box-Fuzzern und zunehmender Relevanz von IT-Sicherheit in den späten 2000ern entwickelte sich ein breiteres Interesse an Fuzzing, inklusive einiger Open Source Fuzzern und Fuzzing Frameworks, hin zu Fuzzing als Kernbestandteil des Sicherheits-Testings vieler relevanter Open Source Software Projekte, vorrangetrieben insbesondere durch Projekte wie Googles OSS-Fuzz, ein Service zum kontinuierlichen Testen verschiedenster Open Source Software durch mehrere verschiedene Fuzzer.
 
 \subsection{Beschränkungen im Fuzzing}
-Leider ist natürlich auch Fuzzing nicht ohne Probleme und Beschränkungen. Da Fuzzing zu großen Teilen darauf beruht eine große Menge an Eingaben zu Testen sinkt die Effizienz des Fuzzings deutlich wenn die Ausführug des Fuzz-Targets zu lange dauert. Dies führt dazu, dass das Fuzzen komplizierter, insb. interaktiver Systeme nicht ohne weiteres effizient möglich ist. Dieses Problem wird zumeist gelöst indem man komplexe Systeme in kleinere, simple Subsysteme aufteilt und diese unabhängig voneinander fuzzt und so beispielsweise unnötigen Overhead im Setup des Fuzz-Targets vermeidet. Aber auch dies hat seine Nachteile: Der Tester muss hier nun mit der Struktur des zu testenden Systems bekannt sein, muss das komplexe System in kleinere Systeme selbst zerlegen und dann für jedes der Subsysteme einzelne Fuzz-Targets schreiben - dies ist zeit- und arbeitsaufwändig und, ähnlich wie beim klassischen Testing, anfällig für Fehler des Testers. 
+Leider ist natürlich auch Fuzzing nicht ohne Probleme und Beschränkungen. Da Fuzzing zu großen Teilen darauf beruht eine große Menge an Eingaben zu Testen sinkt die Effizienz des Fuzzings deutlich wenn die Ausführug des Fuzz-Targets zu lange dauert. Dies führt dazu, dass das Fuzzen komplizierter, insbesondere interaktiver Systeme nicht ohne weiteres effizient möglich ist. Dieses Problem wird zumeist gelöst indem man komplexe Systeme in kleinere, simple Subsysteme aufteilt und diese unabhängig voneinander fuzzt und so beispielsweise unnötigen Overhead im Setup des Fuzz-Targets vermeidet. Aber auch dies hat seine Nachteile: Der Tester muss hier nun mit der Struktur des zu testenden Systems bekannt sein, muss das komplexe System in kleinere Systeme selbst zerlegen und dann für jedes der Subsysteme einzelne Fuzz-Targets schreiben - dies ist zeit- und arbeitsaufwändig und, ähnlich wie beim klassischen Testing, anfällig für Fehler des Testers. 
 
 \section{Checkpoint/Restore}
 
-C/R is the idea of saving the state of a some running code to be continued at some later point. 
-\subsection{C/R in anderen Kontexten}
-This mostly sees use around debugging though there are libraries that make migration of prcoesses between possible. 
+Mit Checkpoint/Restore, kurz C/R, manchmal auch Checkpoint/Restart, bezeichnet man das Speichern eines Prozesses oder einer Andwendung in einer Art und Weise die eine spätere Wiederherstellung und weitere Ausführung der Anwendung erlaubt.
+C/R-Systeme finden Anwendung in verschiedenen Bereichen, beispielsweise im Debugging und Fault Recovery durch das Zurücksetzen eines Programmes auf einen vorherigen Zustand, in der Beschleunigung oder Optimierung von Prozessen durch das Fortsetzen von Anwendungen von Checkpoints anstatt rechenzeitaufwändigen Komplettausführungen und dem Aussetzen der Ausführung von Programmen wenn diese grade nicht benötigt werden oder, je nach Fähigkeiten des zugrundeliegenden C/R-Systems, sogar die Migration von laufenden Anwendungen zwischen Maschinen.
+
+TODO: Was alles muss gespeuchert werden? 
+
 \subsection{C/R Typen und Unterscheidungen}
+Für das Checkpointing/Restoring von Anwendungen gibt es nicht einen einzelnen Standard sondern eine ganze Reihe von Modellen die wir grob nach zwei Faktoren klassifizieren: Typ bzw. Implemetierungsebene und nach den Fähigkeiten des Checkpoint/Restore-Systems, also welche Aspekte des Programms genau wiederhergestellt werden können und welche nicht.
+
 \subsubsection{Nach Typ}
-There are multiple types of C/R tools by what they restore: Running enviroments (Docker), Process sub-trees, single processes, threads. 
+Bei der Klassifizierung nach Typ oder Implemetierungsebene unterscheiden wir grob nach drei Kategorien: Das Checkpointen im Userspace, aus dem zu checkpointenen Programm selbst, das Checkpointen auf Kernelebene und das Checkpointen von Virtuellen Maschinen beziehungsweise Containern.\\ \\
+%\subsubsubsection{Userspace-C/R}
+Im klassischen Userspacecheckpointing findet das Checkpointing größtenteils transparent gegenüber dem Kernel statt, das heißt das C/R-Tool nutzt aus dem Userspace zugängliche Ressourcen wie /proc/ oder Intercepts von Library- oder Syscalls zum sammeln der notwendigen Checkpoint-Informationen und ebenfalls nur ohne besondere Privilegien zugängige Ressourcen zur Wiederherstellung. 
+Dieses Vorgehen führt in reinen Userspace-C/R-Systemen wie DMTCP (Distributed MultiThreaded CheckPointing) unter Umständen zu einigen Fallstricken oder Problemen, so können zum Beispiel nicht alle Eigenschaften eines Programmes, beispielsweise die PID, nicht ohne weiteres korrekt wiederhergestellt werden, die Intercepts benötigen alternative Libraries die spätestens zur Startzeit mit der Anwendung gelinkt werden müssen, häufig Beschränkungen darauf haben mit welchen Programmen (bspw. Sprachen) sie genutzt werden können und unter Umständen die Funktionsweise des Programmes ändern könnten sowie mögliche Performanceeinbußen durch das duplizieren von Kernelstrukturen im Userspace.\\ \\
+%\subsubsubsection{Kernelebene-C/R}
+Dem gegenüber steht das Checkpointing auf Kernelebene, beispielsweise BLCR (Berkeley Lab's Linux Checkpoint/Restart) oder Linux-C/R.
+C/R-Systeme nutzen den Kernel direkt um alle nötigen Informationen wärend des Checkpointings zu sammeln, benötigen also keine Libraries zum Sammeln eben dieser Informationen durch das Abfangen von Syscalls o.ä., und haben alle nötigen Privilegien um, theoretisch, falls implementiert, alle Eigenschaften der Anwendung auch korrekt wiederherzustellen. Allerdings muss der Kernel eben diese Funktionalitäten anbieten damit Kernelebene-C/R-Tools eingesetzt werden können und obwohl es wiederholt versuche der Integration von C/R-Tools in den Mainline Linux Kernel gab ist dies bisher nicht geschehen, das heißt es wird zur Nutzung ein gepatchter Kernel oder ein Kernel mit zusätzlichen Modulen benötigt.\\
+Das Checkpointing mit Kernelebene-C/R-Tools folgt zumeist einem Schema änhlich diesem:
+\begin{enumerate}
+    \item Einfrieren und Synchronisieren der Prozesse und Threads
+    \item Erfassen von globalen Informationen (d.h. Informationen die nicht direkt Teil der zu checkpointenden Anwendung sind wie Namespaces oder Container)
+    \item Erfassen der Prozess- bzw. Thread-Hierachien und -Informationen wie Parent/Child-Verhältnisse, PIDs, \dots
+    \item Erfassen des Statuses der einzelnen Prozesse und Threads, bspw. Signals, geöffnete Files und FDs, \dots
+    \item Beenden oder Weiterausführung der Anwendung, Schreiben all der erfassten Informationen
+\end{enumerate}
+Dabei werden all diese Schritte natürlich nicht von der zu checkpointenden Anwendung selbst vorgenommen sondern von einem dafür gespawnten externen Prozess. Das Wiederherstellen funktioniert generell in änhlicher Weise:
+\begin{enumerate}
+    \item Wiederherstellen der globalen Information, beispielsweise Container bei Multiprocess-Anwendungen oder dem Prozess bei Multithreaded aber Singleprocess Anwedungen, wenn nötig
+    \item Erstellen einer Prozess- bzw. Threadhierachie entsprechend der erfassten Hierachie (in eingefrorenem Zustand)
+    \item Wiederherstellung des Statuses der einzelnen Prozesse und Threads
+    \item "Fortsetzen" beziehungsweise Auftauen der Prozesse/Anwendung
+\end{enumerate}
+CRIU (Checkpoint/Restore in Userspace) ist ein Hybrid aus Userspace- und Kernelebene-Systemen, das heißt es agiert größtenteils in Userspace, nutzt jedoch Calls auf privilegierte Operationen wie das Forken mit bestimmten PIDs. All diese von CRIU benötigten Kernel-Capabilities sind seit einiger Zeit im Linux Mainline-Kernel vorhanden.
+Das Checkpointing und Restoring in CRIU ähnelt stark dem der Kernelebene-C/R-Systeme, benötigt insbesodere keine Intercept-Libraries wie normale Userspace-C/R-Tools, jedoch können nicht all diese Informationen von externen Programmen erfasst oder hergestellt werden. Dies umgeht CRIU indem es mittels ptrace sogennanten parasite code in die zu checkpointenen Prozesse einfügt (beziehungsweise den restorer blob bei der Wiederherstellung) die eben diese Informationen erfassen.\\ \\
+Das Checkpointen von Virtuellen Maschinen oder Containern nutzt zumeist einen der obigen Ansätze um die laufenden Virtuelle Maschine (als Anwendung auf dem Host-System) als ganzes zu Checkpointen. So nutzt Docker beispielsweise CRIU, verwaltet durch entsprechenden Aufrufe des docker Kontrollprogramms \texttt{docker checkpoint create [...]} und \texttt{docker start --checkpoint [...]}.
+
 \subsubsection{Nach Capabilities}
-There are different capabilities they bring to the table, e.g. if they can restore Network connections, and they of course have different efficiencies.
+Zusätzlich unterscheiden sich verschiedene C/R-Tools auch noch danach was genau sie Checkpointen und Restoren können. Einige Tools wie frühere BLCR-Versionen unterstützen nur einzelne multi- oder singlethread Prozesse, Linux-CR unterstützt das Checkpointen beliebiger Container oder Subtrees von Prozessen. Tools die innerhalb von multithreaded Prozessen arbeiten, beispielsweise einzelne Threads checkpointen und wiederherstellen können existieren anscheinend nicht, zumindest fanden wir keine. Dies ist auch plausibel, da solche Threads sich eben Ressourcen teilen und daher ein teilweises Wiederherstellen nur einiger Threads zu undefiniertem Verhalten führen würde.\\
+Weitere Unterschiede gibt es in der Frage welche Eigenschaften von laufenden Programmen wiederhergestellt werden können, beispielsweise Netzwerkverbindungen wie TCP- oder UDP-Sockets, Dateien oder Namespaces, sowie bezüglich der Frage ob beliebige Programme gecheckpointed werden können oder ob bereits beim Start der Anwendung bekannt sein muss, dass diese gecheckpointed werden soll und entsprechende Vorbereitungen wie das Preloading von Libraries oder das Informieren des Kernels getroffen werden müssen.
 
 \section{CRIU}
 CRIU is such a tool. 
