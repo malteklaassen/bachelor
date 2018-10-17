@@ -99,38 +99,33 @@ Das Checkpointen von Virtuellen Maschinen oder Containern nutzt zumeist einen de
 Zusätzlich unterscheiden sich verschiedene C/R-Tools auch noch danach was genau sie Checkpointen und Restoren können. Einige Tools wie frühere BLCR-Versionen unterstützen nur einzelne multi- oder singlethread Prozesse, Linux-CR unterstützt das Checkpointen beliebiger Container oder Subtrees von Prozessen. Tools die innerhalb von multithreaded Prozessen arbeiten, beispielsweise einzelne Threads checkpointen und wiederherstellen können existieren anscheinend nicht, zumindest fanden wir keine. Dies ist auch plausibel, da solche Threads sich eben Ressourcen teilen und daher ein teilweises Wiederherstellen nur einiger Threads zu undefiniertem Verhalten führen würde.\\
 Weitere Unterschiede gibt es in der Frage welche Eigenschaften von laufenden Programmen wiederhergestellt werden können, beispielsweise Netzwerkverbindungen wie TCP- oder UDP-Sockets, Dateien oder Namespaces, sowie bezüglich der Frage ob beliebige Programme gecheckpointed werden können oder ob bereits beim Start der Anwendung bekannt sein muss, dass diese gecheckpointed werden soll und entsprechende Vorbereitungen wie das Preloading von Libraries oder das Informieren des Kernels getroffen werden müssen.
 
-\section{CRIU}
-CRIU is such a tool. 
-\subsection{Funktionsweise}
-It works in some way. 
-\subsection{Warum CRIU}
-It has some capabilities that make it interesting. 
-\subsection{Probleme}
-It does not work out of the box in a fuzzing context, here is how we can fix those issues. 
-\subsection{Performance}
-Here are estimates for performance.
-
 \section{Fuzzing mit C/R}
+Aim of this thesis: Answer the question wether we could solve some or all of aboves issues in using fuzzing for security testing by using C/R. In this chapter we will look at a few approaches and their requirements, general feasibility and what issues they would solve.
+There are two generally possible approaches: 1. Using C/R in a Fuzzer that is not just aware that C/R is happening but does the C/R parts for you and makes active use of C/R for performance 2. Using a "normal" fuzzer and do all the C/R stuff in the fuzztarget
 \subsection{C/R-Fuzzer}
-Would be nice, would look something like this. It would have the following behaviour and problems.
+How would this generally work? What issues might exist? What would this solve? How would this impact performance?
 \subsection{Non-C/R-Fuzzer mit C/R Ansätze}
 Can we make something work with normal Fuzzers? What could it look like? What could we use it for?
 \subsubsection{Naiv}
 \subsubsection{Exploration des Zustandsgraphen in Client/Server Systemen}
 
+\section{CRIU}
+CRIU is probably the only C/R tools that could make sense right now, two reasons why: 1. It's actually still getting updates unlike most of the other things 2. It's capabilities.
+\subsection{Funktionsweise}
+Detailed description of internal functionality of CRIU.
+\subsection{Capabilities}
+What can we restore with CRIU? 
+\subsection{Probleme}
+It does not work out of the box in a fuzzing context, here is how we can fix those issues. 
+\subsection{Performance}
+Here are estimates for performance.
+
+
 \section{CRIU + Fuzzing Engines}
-Doesn't work, this is why.
+We have a quick look at modern fuzzing engines.\\
+Now, this is where it gets annoying: CRIU doesn't work with pretty much any modern fuzzing engines, here is why. But this wouldn't just be CRIU but any C/R in existence. To fix this we would either need 1. In-Process Thread-Restoring (why wouldn't this be a good idea?) 2. Multi-Process Fuzzing Engines.
 
 \section{Fazit und Ausblick}
-Was können wir grade machen? Nichts! Was bräuchten wir um was machen zu können?
-
-
-
-
-
-
-
-
 
 \end{document}
 

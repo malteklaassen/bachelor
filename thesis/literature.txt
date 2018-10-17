@@ -1,0 +1,21 @@
+Facebook breach: https://money.cnn.com/2018/09/28/technology/facebook-breach-50-million/index.html
+
+Ransomware: https://www.tagesschau.de/ausland/wannacry-microsoft-103.html
+
+Heartbleed: http://www.spiegel.de/thema/heartbleed_openssl_sicherheitsluecke/
+
+Software security methods: https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=1341418
+
+Random input testing: https://dl.acm.org/citation.cfm?id=802530
+
+Fuzzing history: https://codeengn.com/archive/Reverse%20Engineering/Fuzzing/Fuzzing%20the%20Past,%20the%20Present%20and%20the%20Future%20[Ari%20Takanen].pdf
+
+CRIU/Userlevel checkpointing: https://criu.org/Checkpoint/Restore
+
+User-Level-Checkpointing: http://dmtcp.sourceforge.net/papers/dmtcp.pdf
+
+Linux-CR: http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.366.6842&rep=rep1&type=pdf#page=159
+
+BCLR: https://cloudfront.escholarship.org/dist/prd/content/qt40v987j0/qt40v987j0.pdf
+
+Docker: https://criu.org/Docker
