@@ -1,13 +1,39 @@
-\documentclass[12pt]{scrartcl}
+\documentclass[a4paper]{article}
 
 \usepackage[ngerman]{babel}
 \usepackage{lmodern}
 \usepackage{listings}
 \usepackage{color}
+\usepackage{amsmath}
+\usepackage{tikz}
 
 \usepackage[utf8]{inputenc}
 
 \usepackage{color}
+
+\usetikzlibrary{arrows,automata}
+
+\lstset
+{ %Formatting for code in appendix
+    %language=Matlab,
+    frame=Trbl,
+    basicstyle=\footnotesize,
+    numbers=left,
+    stepnumber=1,
+    showstringspaces=false,
+    tabsize=1,
+    breaklines=true,
+    breakatwhitespace=false,
+    literate=%
+    {Ö}{{\"O}}1
+    {Ä}{{\"A}}1
+    {Ü}{{\"U}}1
+    {ß}{{\ss}}1
+    {ü}{{\"u}}1
+    {ä}{{\"a}}1
+    {ö}{{\"o}}1
+    {~}{{\textasciitilde}}1
+}
 
 \begin{document}
 
@@ -100,32 +126,236 @@ Zusätzlich unterscheiden sich verschiedene C/R-Tools auch noch danach was genau
 Weitere Unterschiede gibt es in der Frage welche Eigenschaften von laufenden Programmen wiederhergestellt werden können, beispielsweise Netzwerkverbindungen wie TCP- oder UDP-Sockets, Dateien oder Namespaces, sowie bezüglich der Frage ob beliebige Programme gecheckpointed werden können oder ob bereits beim Start der Anwendung bekannt sein muss, dass diese gecheckpointed werden soll und entsprechende Vorbereitungen wie das Preloading von Libraries oder das Informieren des Kernels getroffen werden müssen.
 
 \section{Fuzzing mit C/R}
-Aim of this thesis: Answer the question wether we could solve some or all of aboves issues in using fuzzing for security testing by using C/R. In this chapter we will look at a few approaches and their requirements, general feasibility and what issues they would solve.
-There are two generally possible approaches: 1. Using C/R in a Fuzzer that is not just aware that C/R is happening but does the C/R parts for you and makes active use of C/R for performance 2. Using a "normal" fuzzer and do all the C/R stuff in the fuzztarget
+Wie oben erwähnt gibt es im klassischen Fuzzing einige Probleme: Komplexe Systeme oder große Overhead im Set-Up des Fuzztargets führen zur Reduktion des Durchsatzes und damit Einschränkung der Effizienz, mehrstufige interaktive Programme wie beispielsweise Netzwerkprotokolle sind als ganzes nur mit großem Aufwand oder sogar gar nicht vernünftig zu fuzzen. In dieser Arbeit wollen wir untersuchen, ob sich einige oder sogar alle dieser Probleme durch die Nutzung von Checkpoint/Restore-Mechanismen beheben oder zumindest in ihren Auswirkungen reduzieren lassen. Dazu betrachten wir zunächst einmal generell mögliche Ansätze und ihre theoretischen Vor- und Nachteile bevor wir ihre Implementierbarkeit mit kontemporären Fuzzern und Checkpoint/Restore-Systemen betrachten.\\
+Generell sehen wir zwei Ansätze zur Integration von Checkpoint/Restore-Tools in Fuzzern:
+\begin{enumerate}
+    \item Integration des C/R-Tools in den Fuzzer selbst, das heißt der Fuzzer selbst übernimmt das Checkpointing und Restoring
+    \item Implementierung des Checkpointing und Restoring im Fuzztarget, transparent zum Fuzzer
+\end{enumerate}
+Die erste Alternative, ein C/R-Fuzzer, wäre aber natürlich eine sauberere Lösung als die ad hoc Lösung der Implementierung im Fuzztarget und bietet die selben oder sogar mehr Möglichkeiten wie die Fuzztarget-Lösung, benötigt aber natürlich eben einen C/R-Fuzzer, etwas das unseren Nachforschung nach bisher nicht einmal in Ansätzen existiert.\\
+%Aim of this thesis: Answer the question wether we could solve some or all of aboves issues in using fuzzing for security testing by using C/R. In this chapter we will look at a few approaches and their requirements, general feasibility and what issues they would solve.
+%There are two generally possible approaches: 1. Using C/R in a Fuzzer that is not just aware that C/R is happening but does the C/R parts for you and makes active use of C/R for performance 2. Using a "normal" fuzzer and do all the C/R stuff in the fuzztarget
 \subsection{C/R-Fuzzer}
-How would this generally work? What issues might exist? What would this solve? How would this impact performance?
+Klassische moderne Fuzzer wie libfuzzer oder afl folgen während des Fuzzings im Allgemeinen diesem Aufbau:
+\begin{lstlisting}[caption=Struktur Klassischer Non-C/R-Fuzzer]
+Bis ein Problem auftritt:
+    Generiere einen neuen Input (aus dem Seed, Corpus, Dictionary Regeln)
+    Führe das Fuzz-Target mit diesem Input aus
+    Analysiere das Fuzz-Target während der Ausführung und update den Corpus wenn nötig
+\end{lstlisting}
+Das heißt das Fuzz-Target wird so oft mit verschiedenen Inputs ausgeführt bis ein Problem auftritt. Dabei hat das Fuzz-Target in Normalfall eine Form wie diese (oder kann in diese Form gebracht werden):
+\begin{lstlisting}[caption=Struktur Klassisches Fuzztarget]
+[Inputunabhängiges Set-Up]
+[Inputabhängiges Set-Up]
+[Zu testender Code oder Funktion]
+\end{lstlisting}
+Hierbei ist das Ergebnis von 1. im Allgemeinen entweder konstant oder zumindest austauschbar wenn es beispielsweise externe (pseudo-)zufällige Einflüsse wie Nutzung der Systemzeit oder Aufrufe von Zufallszahlgeneratoren gibt. Dies heißt aber nun, dass wir das Fuzz-Target aufteilen können wie folgt:
+\begin{enumerate}
+    \item Inputunabhängiges Set-Up
+    \item Inputabhängiges Set-Up und zu testende Funktionalität
+\end{enumerate}
+Wenn wir dies machen können wir nun als Alternative zum klassischen Fuzzer einen C/R-Fuzzer nutzen, der folgendem Aufbau folgt:
+\begin{lstlisting}[caption=Struktur einfacher C/R-Fuzzer]
+Führe den Inputunabhängigen Teil des Fuzz-Targets aus und checkpointe ihn
+Bis ein Problem auftritt:
+    Generiere einen neuen Input (aus dem Seed, Corpus, Dictionary Regeln)
+    Restore das Fuzz-Target, übergebe diesen Input und führe den Inputabhängigen Teil des Fuzz-Targets aus
+    Analysiere den Input-Abhängigen Teil des Fuzz-Targets während der Ausführung und update den Corpus wenn nötig
+\end{lstlisting}
+Hierbei müssen natürlich ein paar Dinge beachtet werden: Die Übergabe des Inputs muss während der Laufzeit beispielsweise über stdin erfolgen, eine Übergabe des Inputs durch Parameter zum Zeitpunkt des Aufrufes wie beispielsweise bei libfuzzer ist nicht ohne weiteres möglich. Das Aufteilen des Fuzz-Targets heißt nicht das Aufteilen in mehrere unabhängige Code-Segmente - damit Checkpoint/Restore ohne Modifikationen funktionieren kann muss der inputabhängige Teil bereits von Anfang an im Fuzz-Target vorhanden sein. Ein solches Fuzz-Target könnte dann wie folgt aussehen:
+\begin{lstlisting}[caption=Struktur C/R-Fuzzer-Fuzztarget]
+[Inputunabhängiges Setup]
+Breakpoint
+[Inputabhängiges Setup]
+[Zu testender Code oder Funktion]
+\end{lstlisting}
+Hierbei hält der Breakpoint die Ausführung des Fuzztargets an und informiert den Fuzzer darüber, dass er an dieser Stelle das Fuzz-Target checkpointen sollte.\\
+Ein solcher C/R-Fuzzer kann unter Umständen das Problem großen Overheads im Setup lösen oder zumindest reduzieren. 
+Mit $T_{Setup}$ die Laufzeit des inputunabhängigen Setups, $T_{Execution}$ die (mittlere) Laufzeit des inputabhängigen Setups und des zu testenden Codes, $T_{Checkpoint}$ und $T_{Restore}$ die benötigte Zeit für eine Checkpointing- beziehungsweise Restoreoperation. 
+Dann ergibt sich für die Laufzeit eines normalen, nicht-C/R Fuzzers bei $n$ benötigten Operationen 
+\begin{equation}
+    T_{Non-C/R}(n) = n (T_{Setup} + T_{Execution})
+\end{equation}
+und für einen C/R-Fuzzer wie oben beschrieben
+\begin{equation}
+    T_{C/R}(n) = T_{Setup} + T_{Checkpoint} + n (T_{Restore} + T_{Execute})
+\end{equation}
+Für große $n$ und $T_{Restore} < T_{Setup}$ ergibt sich hier nun also eine Zeitersparniss pro Iteration:
+\begin{equation}
+    \begin{split}
+        \frac{T_{Non-C/R}(n) - T_{C/R}(n)}{n} &= \frac{(n-1) T_{Setup} - T_{Checkpoint} - n T_{Restore}}{n} \\
+        &=_{n \to \infty} T_{Setup} - T_{Restore}
+    \end{split}
+\end{equation}
+$T_{Setup}$ ist dabei natürlich vom jeweilig zu testenden Programm abhängig, $T_{Restore}$ von mehreren Faktoren, unter anderem dem Programm selbst, insbesondere die Größe im Speicher und die zu checkpoitenen Features wie Netzwerksockets, und natürlich das genutzte Checkpoint/Restore-Tool, eine genauere Betrachtung davon findet in Kapitel CRIU.Performance statt.
 \subsection{Non-C/R-Fuzzer mit C/R Ansätze}
-Can we make something work with normal Fuzzers? What could it look like? What could we use it for?
+Ein anderer Ansatz zur Kombination von Fuzzing mit Checkpoint/Restore-Mechanismen wäre, statt des impliziten Checkpointing durch den Fuzzer, eplizites Checkpointing und Restoring im Fuzztarget. 
+Dies hätte den Vorteil einer größeren Flexivilität im Einsatz und würde im Idealfall keinerlei Änderungen am Fuzzer benötigen, könnte also unter Umständen bereits mit vorhandenen Fuzzern genutzt werden - darauf welche Umstände dies sind und wie es sich ob der Anwendbarkeit bei modernen Fuzzern verhält gehen wir in Kapitel CRIU+Fuzzing Engines ein.
+Wir betrachten hier zwei Varianten dieses Ansatzes: Zuerst eine recht naive Nutzung von Checkpoint/Restore im Fuzztarget eines Non-C/R-Fuzzers mit ähnlichem Ziel und einem ähnlichen Ansatz zu dem oben beschriebenen C/R-Fuzzer, danach eine Architektur die durch Anwendung von Checkpoint/Restore versucht das effiziente Fuzzen komplexer mehrstufiger Programme, beispielsweise Netzwerkprotokolle, durch Exploration des Zustandsgraphen als ganzes zu ermöglichen.\\
+%Can we make something work with normal Fuzzers? What could it look like? What could we use it for?
 \subsubsection{Naiv}
+Eine konzeptuell recht simple Variante der Kombination von klassischen, Non-C/R-Fuzzern mit C/R-Implementierung im Fuzztarget wäre naives Restoring nach dem inputunabhängigen Setup, änhlich wie bei dem oben beschriebenen C/R-Fuzzer. 
+Anders als beim obigen C/R-Fuzzer muss hier jedoch im Fuzztarget entschieden beziehungsweise bestimmt werden, ob wir uns in der ersten Iteration befinden, das Setup also ausgeführt werden und danach gecheckpointed werden muss, oder ob wir uns in einer späteren Iteration befinden, wir also das Setup überspringen und direkt, mittels Restoring, zur Ausführung des zu testenden Codes springen. 
+Dies kann beispielsweise durch das Setzen von Systemvariablen oder das Erstellen von Tokens im Dateisystem geschehen - ist die Variable bei einer Ausführung also gesetzt oder existiert die Datei so befinden wir uns in einer späteren Ausführung und sollten das Setup durch einen Restore überspringen.\\
+Konkret sollte ein solches Fuzztarget dann hierfür in etwa so aussehen:
+\begin{lstlisting}[caption=Struktur C/R-Fuzztarget für Non-C/R-Fuzzer]
+Falls der Token existiert:
+    Restore
+Sonst:
+    Führe Setup aus
+    Setze Token
+    Checkpointe das Programm (ohne Dump)
+    Hole dir den Input
+    Führe den Test mit diesem Input aus
+\end{lstlisting}
+Wenn in Zeile 2 restoret wird so wird die alte, gecheckpointete Instanz wieder hergestellt und setzt ihre Ausführung in Zeile 7 fort, holt sich also neuen Input und testet mit diesem.\\
+Hierbei können jedoch einige Probleme auftreten die zu beachten sind:
+\begin{itemize}
+    \item Wie beim C/R-Fuzzer muss natürlich das Setup inputunabhängig sein beziehungsweise in einen inputunabhängigen Teil, welcher vor dem Checkpoint ausgeführt wird, und einen inputabhängigen Teil, welcher mit dem Test selbst ausgeführt wird, aufgebrochen werden.
+    \item Der Fuzzer muss mit Multiprocess-Programmen umgehen können und über das Vorhandensein des restorten Prozesses informiert sein, inbesondere muss er Exceptions, undefiniertes Verhalten und anderes unerwünschtes Verhalten im restorten Prozess erkennen können. Dies könnte beispielsweise durch eine restore-as-child Funktionalität wie beispielsweise von CRIU angeboten realisiert werden, benötigte jedoch trotzdem noch einen robusten Multiprocessfähigen Fuzzer
+    \item Der restorte Prozess muss in irgendeiner Form an den Input kommen - dies könnte mit kontemporären Fuzzern unter Umständen ein Problem darstellen, da diese zumeist den Input entweder beim Aufruf des Fuzztargets als Argument oder durch einen FD wie \texttt{stdin} übergeben werden - beides Ressourcen auf die der wiederhergestellte Prozess im Allgemeinen keinen Zugriff hat. Dieses Problem könnte gelöste werden indem der restorte Prozess den Input direkt von Fuzzer erhält, beispielsweise indem der Fuzzer die Inputs über einen FIFO oder eine ähnliche Ressource im Filesystem, außerhalb des Prozesses selbst, übergibt oder indem der restorende Prozess vor dem Restore den Input in einer Art und Weise abspeichert, so dass der restorte Prozess diesen Input auslesen kann, beispielsweise wieder durch eine Zwischenspeicherung im Filesystem (siehe Listing WASAUCHIMMER).
+    \item Die Messung der Codecoverage bei White- oder Gray-Box-Fuzzern dürfte wenig zuverlässig sein wenn im Fuzztarget selbst restoret wird - einerseits durch die Einführung von neuen Codeelementen durch das C/R-Tool, wobei dies natürlich vom C/R-Ansatz und dem genutzten C/R-Tool abhängt, saubere Kernelebene-C/R-Tools dürften hier beispielsweise wenig Einfluss haben, andererseits durch die massive und durch den eigentlich Programmcode nicht beschriebene Veränderung des Prozesses durch das Restore. Dies dürfte dazu führen, dass ein solcher Non-C/R-Fuzzer wenig besser als ein Black-Box-Fuzzer funktionieren dürfte.
+\end{itemize}
+\begin{lstlisting}[caption=Struktur C/R-Fuzztarget für Non-C/R-Fuzzer mit Inputdump]
+Falls der Token existiert:
+    Hole den Input
+    Schreibe den Input in eine Datei
+    Restore
+Sonst:
+    Führe Setup aus
+    Setze Token
+    Checkpointe das Programm (ohne Dump)
+    Hole den Input aus der Datei
+    Führe den Test mit diesem Input aus
+\end{lstlisting}
+Ebenso wie der oben beschriebene C/R-Fuzzer versucht dieser Ansatz nur das Setup-Overhead-Problem im Fuzzing zu lösen - mit ähnlichen Laufzeitverbesserungen. Wie auch beim C/R-Fuzzer gilt hier
+\begin{equation}
+    T_{Non-C/R} = n (T_{Setup} + T_{Execution})
+\end{equation}
+$T_{C/R}$ ist etwas komplizierter, da das Fuzztarget hier einige der C/R-Fuzzer-Funktionalitäten ad-hoc implementieren muss, es ergibt sich zunächst:
+\begin{equation}
+    \begin{split}
+        T_{C/R}(n) =\ &1 (T_{Tokencheck} + T_{Setup} + T_{Tokenset} + T_{Checkpoint} + T_{Input} + T_{Execute}) \\
+            &+ (n - 1) (T_{Tokencheck} + T_{Restore} + T_{Input} + T_{Execute}) \\
+            &\overset{(a)}{\simeq} T_{Setup} + T_{Checkpoint} + T_{Execute} + (n-1) (T_{Restore} + T_{Execute}) \\
+            &= T_{Setup} + T_{Checkpoint} + (n-1) T_{Restore} + n T_{Execute}
+    \end{split}
+\end{equation}
+Die Vereinfachung in $(a)$ kommt dabei aus der Annahme, dass die diversen Token- und Inputoperationen verglichen mit den recht langsamen Restore- und Setup-Operationen für die letztendliche Laufzeit nicht ins Gewicht fallen beziehungsweise im Falle der Inputoperationen auch im Non-C/R-Fall ausgeführt werden müssen, dies dort jedoch versteckt geschieht.\\
+Das $T_{C/R}$ in diesem Fall unterscheidet sich nicht relevant vom $T_{C/R}$ in Gleichung (2), der Unterschied um $1 T_{Restore}$ ergibt sich daraus, dass wir im C/R-Fuzzer nach dem ersten Setup nicht direkt weiter ausführen sondern den Prozess beenden und dann später für die erste Ausführung wieder Restoren. Natürlich ließe sich im C/R-Fuzzer-Fall auch diese Optimierung vornehmen.\\
+Auch hier ergibt sich, analog zu Gleichung (3) die Laufzeitverbesserung je Iteration als
+\begin{equation}
+    \begin{split}
+        \frac{T_{Non-C/R}(n) - T_{C/R}(n)}{n} &= \frac{(n-1) T_{Setup} - T_{Checkpoint} - (n-1) T_{Restore}}{n} \\
+        &=_{n \to \infty} T_{Setup} - T_{Restore}
+    \end{split}
+\end{equation}
+
 \subsubsection{Exploration des Zustandsgraphen in Client/Server Systemen}
+Die bisher beschriebenen Ansätze bieten nur sehr naive Ansätze zur Lösung nur eines der beschriebenen Fuzzingprobleme - Laufzeitoverheadreduktion in einstufigen, simplen Anwendungen. 
+In diesem Kapitel beschreiben wir einen Ansatz zum Testen einer Seite komplexerer, insbesondere mehrstufiger, interaktiver Client-Server-Anwendungen. 
+Hierbei wird durch die Fuzzing-Inputs Schritt für Schritt ein Zustandsgraph beispielsweise des Servers aufgebaut, parallel dazu werden bereits diese Zustände jeweils mit den Inputs auf Exceptions gestestet. 
+Zur besseren Lesbarkeit werden wir in diesem Kapitel davon ausgehen, dass ein Server gefuzzt werden soll und das Fuzztarget die Client-Aufgaben übernimmt, dies lässt sich natürlich auch umkehren.\\
+Das Fuzztarget hat dabei in diesem Ansatz mehrere Aufgaben:
+\begin{itemize}
+    \item Client-Server-Interaktion: Das Fuzztarget implementiert nicht einen wirklichen Client der das erwünschte Protokoll spricht sondern simuliert nur einen solchen indem es die von der Fuzzing-Engine generierten Inputs als Client-Input an den Server übergibt, beispielsweise über eine etablierte TCP-Verbindung zwischen dem Server und Client.
+    \item Verwaltung des Servers: Das Fuzztarget hält in persistenter Form, beispielsweise durch Schreiben ins Dateisystem, den bisher gefundenen Zustandsgraphen des Servers, also die gefundenen Zustände und die Inputs die zu Übergängen führen, vor. Zusätzlich wird jeder Zustand wenn er das erste mal erreicht wird gecheckpointet und das entsprechende Image mit dem Zustand verknüpft, das heißt das Fuzztarget muss auch bestimmten wann neue Zustände erreicht werden.
+\end{itemize}
+Hierbei werden dann neu generierte Inputs aber nicht nur auf einen bestimmten Zustand angewendet sondern entweder hintereinander auf alle bisher bekannten Zustände oder auf zufällig gewählte Zustände, so dass der Zustandsgraph weiter ausgebaut wird.\\
+Ein solches Fuzztarget könnte in Pseudocode wie folgt aussehen:
+\begin{lstlisting}[mathescape, caption=Fuzztarget zur Exploration des Zustandsgraphen]
+if token not set:
+    server.start()
+    connection <- connectTo(server)
+    c <- checkpoint(connection)
+    state_id <- server.state
+    s <- cr.checkpoint(server, dump=true)
+    transition = [] // [(input, new_state)]
+    states <- {state_id = {s = s, c = c, t = transition, id = state_id}}
+for state in states:
+    server <- cr.restore(state[s])
+    connection <- restore(state[c])
+
+    input <- fuzzer.input
+    connection.send(input)
+    if state.id $\neq$ server.state and server.state not in states.keys:
+        new_c <- checkpoint(connection)
+        new_state_id <- server.state
+        new_s <- cr.checkpoint(server, dump=true)
+        new_t = []
+        states[state][t].append((input, new_state_id))
+        states[new_state_id] = {s = new_s, c = new_c, t = new_t, id = new_state_id}
+    else if state.id $\neq$ server.state:
+        states[state][t].append(input, server.state)
+\end{lstlisting}
+Hierbei kann es sich bei \texttt{connection} um eine beliebige Verbindungsart zwischen dem Client und dem Server handeln, beispielsweise eine TCP-Verbindung oder UNIX-Sockets, solange das wiederherstellen dieser Verbindung vom C/R-Tool unterstützt wird. Das clientseitige Checkpointing (beispielsweise Zeile 4) wird dabei nicht durch das normale C/R-Tool durchegeführt, da nicht der ganze Client gecheckpointed wird, sondern durch andere, der Art von \texttt{connection} angemessene Ansätze. Für eine TCP-Verbindung kann dies beispielsweise durch einen Userspace TCP/IP-Stack geschehen oder durch das Nutzen der \texttt{TCP\_REPAIR} Option in modernen Linux-Kerneln (seit 3.5).\\
+Zusätzlich muss sich der Server darüber bewusst sein, in welchem Zustand er sich gerade befindet und dies dem Fuzztarget/Client mitteilen können (siehe: \texttt{state\_id <- server.state} etc.), beispielsweise durch Einfügen entsprechender Funktionalität in den Servercode und die Übergabe durch einen entsprechenden IPC-Ansätze oder direkt durch das Auslesen des States aus den C/R-Dumps.\\
+Für einen Server mit bereits bekannten Zuständen $s_0, s_1, s_2, s_3$ mit den Zustandsübergängen wie gezeigt und entsprechenden Inputs für die Übergänge $i_1, \dots, i_4$ würde nun also für einen neuen Input $i*$ wie in Abbildung 1 gezeigt jeder der Zustände $s_0, \dots, s_3$ einmal wiederhergestellt, mit $i*$ getestet und falls Zustand $s_i$ mit Input $i*$ einen neuen Zustand erzeugt dieser gecheckpointed und als Knoten $s_4$ mit der Kante $(s_i, s_4, i*)$ dem Graphen hinzugefügt.
+
+\begin{figure}
+\begin{tikzpicture}[->,>=stealth',shorten >=1pt,auto,node distance=2.8cm,
+                    semithick]
+  \tikzstyle{every state}=[fill=red,draw=none,text=black]
+
+  \node[initial,state] (A)                    {$s_0$};
+  \node[state]         (B) [below left of=A] {$s_1$};
+  \node[state]         (D) [below right of=A] {$s_2$};
+  \node[state]         (C) [below of=B] {$s_3$};
+  \node[state]         (E) [right of=A]       {$?$};
+  \node[state]         (F) [below left of=B]       {$?$};
+  \node[state]         (G) [below right of=D]       {$?$};
+  \node[state]         (H) [right of=C]       {$?$};
+    
+
+  \path (A) edge              node {$i_1$} (B)
+            edge              node {$i_2, i_4$} (D)
+            edge [bend left]  node {$i*$}  (E)
+        (B) edge              node {$i_3$} (C)
+            edge [bend right]  node {$i*$}  (F)
+        (C) edge [bend right] node {$i*$}  (H)
+        (D) edge [bend left] node {$i*$}  (G);
+\end{tikzpicture}
+    \caption{Zustandsübergangsexploration mit Input $i*$}
+\end{figure}
+
+Durch diese schrittweise Erforschung des Zustandsgraphen kann der Fuzzer nun an den verschiedenen Zuständen ansetzen und solte so durch Formulierung nur eines Fuzztargets in der Lage sein die ganze Funktionalität dieses Servers zu testen - anstatt wie im klassischen Fuzzing einzelne Fuzztargets für jeden Pfad in diesem Zustandsgraphen zu schreiben oder sogar nur einzelne Funktionen in Isolation zu testen.\\
+Hierbei gilt natürlich zu beachten, dass auch dieser Ansatz einige Probleme mit sich bringen dürfte:
+\begin{itemize}
+    \item White-Box-Fuzzing beziehungsweise klassisches Gray-Box-Fuzzing durch Code-Coverage werden, wie schon bei den naiven Ansätzen, durch die permanente Variation des tatsächlich ausgeführten Codes erschwert beziehungsweise könnten in bisherigen Fuzzern tatsächlich gar nicht nutzbar sein, da der eigentlich ausgeführte Code, der Client, gar nicht der Code ist den wir Fuzzen wollen - dies wäre der Server. Stattdessen stellt diese Art des Fuzzings jedoch eine eigene Art des Gray-Box-Fuzzings dar, da das Fuzztargets nach und nach die Struktur des Servers, wenn auch auf einem höheren Level als klassische Code-Coverage, herausarbeitet und darüber versucht das Fuzzing zu optimieren.
+    \item Selbst wenn Code-Coverage-Messungen möglich sind so ist ihre Effektivität doch dadurch abgeschwächt, dass diese Inputs auf alle Zustände angewendet werden, nicht nur auf diejenigen Zustände bei denen sie ob der Code-Coverage ausgewählt wurden. 
+    \item Ebenso wie bei der naiven C/R-Implemetierung im Fuzztarget muss der Fuzzer auch hier mit Multiprocess-Anwendung umgehen können, insbesondere den Server - als vom Fuzztarget gestartetes, eigenständiges Programm - in die Suche von Exceptions einbeziehen.
+    \item Das Formulieren von Regeln, Dictionaries, \dots für den Inputs eines Smart-Fuzzers wird verkompliziert, da diese Regeln nun nichtnur für einen Pfad oder eine bestimmte Funktion gelten sollten sondern für das ganze zu testende Programm. 
+        Dies kann unter Umständen zu einer Vergrößerung des Suchraums oder sogar der nicht-Nutzbarkeit von Smart-Fuzzern führen was wiederum zu Performanceeinbußen führen kann
+    \item In Fällen in denen es nur wenige gültige Übergänge auf einen Zustand mit hoher Distanz vom Ausgangsknoten gibt könnte es passieren, dass die Inputs bereits untersucht wurden oder als wenig vielversprechend von der Fuzzing-Engine verworfen wurden. Um dies zu vermeiden sollte die Optimierung der Inputs, wenn überhaupt möglich, nicht zu zielgerichtet erfolgen.
+    
+\end{itemize}
+
+%Welche Probleme soll dies lösen? Das Testen komplexer interaktiver mehrstufiger Programme, beispielsweise von Client-Server-Systemen mit klar definierten Zustandsgraphen\\
+%Wie löst es das? Es findet verschiedene Zustände und wendet mittels C/R Inputs auf all diese Zustände an, schaut ob es Bugs oder neue Zustände findet.\\
+%Pseudocode des Fuzztargets\\
+%Zustandsgraphbeispiel\\
+%Was für Probleme oder Beschränkungen kann es hierbei geben? Wie oben: White-Box-Fuzzing erschwert, wenn Server gemessen werden sollen muss der Fuzzer über diesen informiert sein und ihn messen, Determinismus. Dazu: Woran erkennen wir Zustände? Vermutlich am besten Codemarker ... durch den Programmierer/Tester. Performancereduktion in White/Gray Box Fuzzing, da man Inputs für einen Zustand im Idealfall generiert und dann auf alle anwendet.
+
+
 
 \section{CRIU}
-CRIU is probably the only C/R tools that could make sense right now, two reasons why: 1. It's actually still getting updates unlike most of the other things 2. It's capabilities.
+CRIU is probably the only C/R tools that could make sense right now, two reasons why: 1. It's actually still getting updates and is actually easily useable on modern systems unlike many of the other things 2. It's capabilities exceed any other modern C/R tool
 \subsection{Funktionsweise}
 Detailed description of internal functionality of CRIU.
 \subsection{Capabilities}
-What can we restore with CRIU? 
+What can we restore with CRIU? Pretty much any program, independent of language etc, does not require linking with some interception library, marking at start, ... CRIU also can restore pretty much any feature we could find, especially established TCP connection.
 \subsection{Probleme}
-It does not work out of the box in a fuzzing context, here is how we can fix those issues. 
+It does not work out of the box in a fuzzing context, due to: 1. Firewall rules and resets, we can fix that by adding those manually after each iteration. 2. PIDs are already in use again. There could be two fixes here: Either putting it in it's own pid namespace or possibly by running it in a context that does not require exact PID matches, e.g. detached from the shell, ...
 \subsection{Performance}
-Here are estimates for performance.
+Here are estimates for performance, as in "$T_{Restore} = x$. There are also comparisons to benchmarks for other fuzzing engines we found, especially Linux-CR which seems to have way better performance (though we were not able to get Linux-CR working on our machine so we have to rely on data from their paper). Short discussion what makes CRIU so much slower than Linux-CR and what performance depends on anyway.
 
 
 \section{CRIU + Fuzzing Engines}
 We have a quick look at modern fuzzing engines.\\
-Now, this is where it gets annoying: CRIU doesn't work with pretty much any modern fuzzing engines, here is why. But this wouldn't just be CRIU but any C/R in existence. To fix this we would either need 1. In-Process Thread-Restoring (why wouldn't this be a good idea?) 2. Multi-Process Fuzzing Engines.
+Now, this is where it gets annoying: CRIU - or any other CR system - doesn't work with pretty much any modern fuzzing engines, most notably as they restore processes, not threads. To fix this we would either need 1. In-Process Thread-Restoring (and there are a few reasons why that probably isn't the best of all ideas - most notably shared ressources in different stats, shared memory where both code lives, ...) 2. Multi-Process Fuzzing Engines - yeah, we don't have those yet apparently.
 
 \section{Fazit und Ausblick}
+There still is room for research in this area, especially if higher performance C/R-Systems like Linux-C/R are a thing and once Multi-Process-Fuzzer exist.
 
 \end{document}
 
