@@ -11,6 +11,10 @@
 
 \usepackage{color}
 
+\usepackage{mathtools}
+
+\usepackage{booktabs}
+
 \usetikzlibrary{arrows,automata}
 
 \lstset
@@ -38,7 +42,7 @@
 \begin{document}
 
 \author{Malte Klaassen}
-\date{tbd}
+\date{17.11.2018}
 \title{Checkpoint/Restore in Fuzzing}
 
 \maketitle
@@ -97,7 +101,7 @@ Für das Checkpointing/Restoring von Anwendungen gibt es nicht einen einzelnen S
 \subsubsection{Nach Typ}
 Bei der Klassifizierung nach Typ oder Implemetierungsebene unterscheiden wir grob nach drei Kategorien: Das Checkpointen im Userspace, aus dem zu checkpointenen Programm selbst, das Checkpointen auf Kernelebene und das Checkpointen von Virtuellen Maschinen beziehungsweise Containern.\\ \\
 %\subsubsubsection{Userspace-C/R}
-Im klassischen Userspacecheckpointing findet das Checkpointing größtenteils transparent gegenüber dem Kernel statt, das heißt das C/R-Tool nutzt aus dem Userspace zugängliche Ressourcen wie /proc/ oder Intercepts von Library- oder Syscalls zum sammeln der notwendigen Checkpoint-Informationen und ebenfalls nur ohne besondere Privilegien zugängige Ressourcen zur Wiederherstellung. 
+Im klassischen Userspacecheckpointing findet das Checkpointing größtenteils transparent gegenüber dem Kernel statt, das heißt das C/R-Tool nutzt aus dem Userspace zugängliche Ressourcen wie \texttt{/proc/} oder Intercepts von Library- oder Syscalls zum sammeln der notwendigen Checkpoint-Informationen und ebenfalls nur ohne besondere Privilegien zugängige Ressourcen zur Wiederherstellung. 
 Dieses Vorgehen führt in reinen Userspace-C/R-Systemen wie DMTCP (Distributed MultiThreaded CheckPointing) unter Umständen zu einigen Fallstricken oder Problemen, so können zum Beispiel nicht alle Eigenschaften eines Programmes, beispielsweise die PID, nicht ohne weiteres korrekt wiederhergestellt werden, die Intercepts benötigen alternative Libraries die spätestens zur Startzeit mit der Anwendung gelinkt werden müssen, häufig Beschränkungen darauf haben mit welchen Programmen (bspw. Sprachen) sie genutzt werden können und unter Umständen die Funktionsweise des Programmes ändern könnten sowie mögliche Performanceeinbußen durch das duplizieren von Kernelstrukturen im Userspace.\\ \\
 %\subsubsubsection{Kernelebene-C/R}
 Dem gegenüber steht das Checkpointing auf Kernelebene, beispielsweise BLCR (Berkeley Lab's Linux Checkpoint/Restart) oder Linux-C/R.
@@ -339,15 +343,103 @@ Hierbei gilt natürlich zu beachten, dass auch dieser Ansatz einige Probleme mit
 
 
 \section{CRIU}
-CRIU is probably the only C/R tools that could make sense right now, two reasons why: 1. It's actually still getting updates and is actually easily useable on modern systems unlike many of the other things 2. It's capabilities exceed any other modern C/R tool
+Für den Rest der Arbeit werden wir CRIU - Checkpoint/Restore in Userspace - näher betrachten und CRIUs Nutzbarkeit für Fuzzing, insbesondere in Kombination mit kontemporären Fuzzing-Engines, untersuchen. Die Wahl von CRIU als C/R-Tool für diese Untersuchung ist dabei auf mehrere Gründe zurückzuführen:
+\begin{itemize}
+    \item Verfügbarkeit \& Aktualität: CRIU ist ein vergleichsweise modernes, gut dokumentiertes Open Source C/R-Tool das geringe Anforderungen - es benötigt keine Kernelpatches oder -module außerhalb des Linux Mainline Kernels - an das System stellt und ist daher auf einer Vielzahl von Systemen verfügbar. Zusätzlich wird CRIU von den Entwicklern noch unterstützt und weiterentwickelt, im Gegensatz zu einigen anderen vielversprechenden C/R-Tools wie Linux-C/R.
+    \item Unveränderte Binary: Anders als einige andere Userspace-C/R-Tools nimmt CRIU keine Veränderungen an der Binary vor oder benötigt bestimmte Schritte bei der Kompilierung - CRIU benötigt nichteinmal besondere Schritte beim Anwendungsstart, erst zum Zeitpunkt des Checkpointens wird CRIU aktiv.
+    \item Capabilities: CRIU bietet eine breite Palette an Capabilities die mit CRIU wiederhergestellt werden können, insbesondere TCP- und andere Netzwerkverbindungen, mehr dazu in Kapitel CRIU.Capabilities.
+\end{itemize}
+CRIU findet unter anderem Anwendung in einigen prominenten Container-Anwendungen wie Docker, LXC/LXD und OpenVZ, anstatt des Legacy OpenVZ C/R-Systems, zur Implementierung des Container-Checkpointings.\\
+
+%CRIU is probably the only C/R tools that could make sense right now, two reasons why: 1. It's actually still getting updates and is actually easily useable on modern systems unlike many of the other things 2. It's capabilities exceed any other modern C/R tool
+\subsection{Nutzung}
+%TODO
+Es gibt zwei Kategorien wie CRIU genutzt werden kann:
+\begin{itemize}
+    \item Die Nutzung über das Command Line Interface ohne Remote Procedure Call beziehungsweise ohne CRIU Service
+    \item Die Nutzung des RPCs entweder durch das CLI oder eine Programmiersprachen API, insbesondere die C-API
+\end{itemize}
+Unabhängig davon welcher der beiden Optionen man nutzt folgt das Checkpointing und Restoring in etwa den gleichen Schritten:
+\begin{itemize}
+    \item Falls RPC genutzt werden soll muss der Service laufen (beispielsweise zu starten durch \texttt{criu service}), falls die C-API genutzt wird muss diese mittels \texttt{criu\_init\_opts()} initialisiert werden
+    \item Man bestimmt welchen laufenden Prozess man checkpoiten möchte, meist über die \texttt{PID} durch Nutzung der \texttt{--tree \$PID} Option beziehungsweise \texttt{criu\_set\_pid(pid)}, falls sich ein Prozess über die C-API selbst checkpointen möchte muss \texttt{criu\_set\_pid} nicht explizit aufgerufen werden. Zusätzlich muss angeben werden, ob der Prozess nach dem Checkpointing fortgesetzt werden oder beendet werden soll.
+    \item Man gibt einen Pfad oder einen FD für das Image-Directory an, entweder über die \texttt{--images-dir \$IMGDIR} Option oder \texttt{criu\_set\_images\_dir\_fd(fd)}, bei der Nutzung der C-API muss \texttt{fd} ein bereits geöffneter FD auf das Verzeichnis sein in das das Image geschrieben werden soll
+    \item Spezifizierung der nötigen Zusatzinformationen, insbesondere \texttt{--shell-job} beziehungsweise \texttt{criu\_set\_shell\_job(true)}, \texttt{--tcp-established} beziehungsweise \texttt{criu\_set\_tcp\_established(true)} und andere externe Ressourcen falls nötig
+    \item Modifikation der Socket-Location des Services, des Log-Levels, Log-Files, \dots falls nötig oder erwünscht
+\end{itemize}
+Diese Optionen werden dann mit der entsprechenden Operation, beispielsweise Checkpointing (\texttt{criu dump}, \texttt{criu\_dump()}) oder Restoring (\texttt{criu restore}, \texttt{criu\_restore()}), kombiniert, diese wird dann von CRIU ausgeführt. Wird ein Shell-Job restored so wird dieser direkt an das laufende Terminal attached.
+
 \subsection{Funktionsweise}
+CRIU is Userspace 
 Detailed description of internal functionality of CRIU.
 \subsection{Capabilities}
 What can we restore with CRIU? Pretty much any program, independent of language etc, does not require linking with some interception library, marking at start, ... CRIU also can restore pretty much any feature we could find, especially established TCP connection.
 \subsection{Probleme}
 It does not work out of the box in a fuzzing context, due to: 1. Firewall rules and resets, we can fix that by adding those manually after each iteration. 2. PIDs are already in use again. There could be two fixes here: Either putting it in it's own pid namespace or possibly by running it in a context that does not require exact PID matches, e.g. detached from the shell, ...
 \subsection{Performance}
-Here are estimates for performance, as in "$T_{Restore} = x$. There are also comparisons to benchmarks for other fuzzing engines we found, especially Linux-CR which seems to have way better performance (though we were not able to get Linux-CR working on our machine so we have to rely on data from their paper). Short discussion what makes CRIU so much slower than Linux-CR and what performance depends on anyway.
+Bei der Betrachtung der Performance von C/R-Systemen gibt es zumeist zwei Komponenten zu betrachten: 
+\begin{itemize}
+    \item Die Performanceeinflüsse zur Laufzeit des Programms, ausgelöst beispielsweise durch das Sammeln von Informationen die für das Checkpointing relevant sind
+    \item Die benötigte Zeit für das Durchführen der tatsächlichen Checkpointing- und Restore-Operationen
+\end{itemize}
+Ersteres, Performanceeinflüsse des laufenden Programms, sind bei C/R-Systemen wie CRIU jedoch nicht-existent, da vor dem Checkpointing weder dem Kernel noch der Anwendung selbst bewusst ist, dass sie gecheckpointed werden wird, und nach dem Restoring zwar Reste des Restorer Context Blobs noch in Memory vorhanden sein können, diese sich jedoch nicht mit dem Anwendungscode überschneiden und entsprechenden im Normalfall keinen Einfluss auf die weitere Performance haben werden.\\
+Die Geschwindingikeit mit der Checkpointing und Restore Operationen durchgeführt werden können spielt für klassische Zwecke wie Debugging oder Fault-Recovery zumeist eine untergeordnete Rolle, da wir hier zumeist die Anwendung nur eine handvoll Male checkpointen und restoren, die Grenzen der Akzeptabilität der Wartezeit hier zumeist durch menschliche Interaktion oder die normal erwartete Startup-Zeit bestimmt werden.
+Bei Nutzung von C/R-Systemen für Fuzzing sieht dies natürlich anders aus - die Geschwindigkeit mit der wir Anwendungen wiederherstellen können $T_{Restore}$ ist wie wir in Kapitel 3 von hoher Relevanz für das C/R-fuzzen von Anwendungen, da wir für jeden Testfall mindestens einmal restoren müssen.\\
+Die benötigten Zeiten für C/R-Operationen hängen dabei von einer Reihe von verschiedenen Umständen ab, unter anderem:
+\begin{itemize}
+    \item Allokierter/Genutzter Speicher der Anwendung
+    \item Größe des Prozessbaumes
+    \item Auswahl zu restorender Features wie TCP-Sockets
+    \item TODO: Mehr?
+\end{itemize}
+Da natürlich auch externe Einflüsse wie Hardware, Auslastung, \dots einen Einfluss auf die Performance haben und diese Zeiten zumeist, wie oben beschrieben, nicht von hoher Relevanz in der Nutzung sind ist der Vergleich der Performance aus der Literatur heraus zumeist nicht möglich.\\
+
+% Iterationen, 1bit, 100bit, 100^2bit, 100^3bit, 100^4bit, tcp
+% 10
+% 100
+% 500
+% T_Restore
+\begin{center}
+\begin{figure}
+\begin{tabular}{| l | l  l  l  l  l | l |}
+    \toprule
+    Iterationen & $100^0$byte & $100^1$byte & $100^2$byte & $100^3$byte & $100^4$byte & TCP \\
+    \midrule
+    10 & 0.292s & 0.290s & 0.292s & 0.301s & 0.627s & 0.982s \\
+    50 & 1.269s & 1.269s & 1.256s & 1.298s & 2.332s & 4.615s \\
+    100 & 2.459s & 2.494s & 2.477s & 2.558s & 4.482s & 9.170s \\
+    500 & 12.205s & 12.228s & 12.250s & 12.648s & 21.564s & 45.541s \\
+    \midrule
+    $T_{Restore}$ & 0.024s & 0.024s & 0.024s & 0.025s & 0.043s & 0.091s \\
+    \bottomrule
+\end{tabular}
+    \caption{Performancemessung} % TODO: Better name
+\end{figure}
+\end{center}
+
+Abbildung [TODO: Performancemessung] zeigt die Ergebnisse von Performancemessung in Hinsicht auf Laufzeit eines Launchers der Anwendungen startet, checkpointed und dann diese wiederholt wiederherstellt sobald die Anwendung terminiert. Diese Messung fand auf einem Lenovo Thinkpad X230 statt, die Laufzeiten sind das arithmetische Mittel jeweils mehrerer Messungen, für die gesamten Ergebnisse siehe Anhang [TODO].
+Die Anwendungen sind dabei
+\begin{enumerate}
+    \item Eine einzelne Anwendung die eine bestimmte Anzahl bytes zufällige Daten ließt, sich selbst checkpointed und dann eine sehr simple Operation auf den Daten ausführt und das Ergebnis auf \texttt{stdout} ausgibt (TODO: Anhang)
+    \item Ein Client-Server-Paar das eine TCP-Verbindung aufbaut, sich selbst checkpointen und dann sich gegenseitig jeweils ein kurzes Datenpaket zusenden, dabei Informationen über den Zustand auf \texttt{stdout} ausgeben (TODO: Code im Anhang)
+\end{enumerate}
+Dabei setzen sich die Zeitmessungen über $n$ Iterationen wie in Gleichung [TODO] zusammen. 
+Durch die Kombination von Messungen mit verschiedenen Iterationen, siehe Gleichung [TODO], lässt sich dies dann als lineares Gleichungssystem formulieren und sowohl $T_1$ als auch $T_2$ abschätzen. 
+Dabei fällt auf, dass $T_{Execute}$ mit individuell gemessenen Zeiten von relevant unter $1ms$ in $T_2$ vernachlässigt werden kann, also der so erhaltene Wert von $T_2$ bereits eine sehr gute Approximation für $T_{Restore}$ ist. 
+\begin{equation}
+    T(n) = T_1) + n T \coloneqq (T_{Setup} + T_{Checkpoint}) + n (T_{Restore} + T_{Execute})
+\end{equation}
+
+\begin{equation}
+    \begin{split}
+    T(n_1) = T_1 + n_1 T_2 \\
+    T(n_2) = T_1 + n_2 T_2
+    \end{split}
+\end{equation}
+Damit ergeben sich nun also nun mittlere Wiederherstellungszeiten, je Iteration, von ca. $24ms$ für die einfach Wiederherstellung sowie zusätzliche Zeit je nach Menge von genutztem Speicher und Zeiten von ca. $90ms$ für die Wiederherstellung von einem Client-Server-Paar mit bestehender TCP-Verbindung - dies sollte auch schon bereits die Dauer der Wiederherstellung einer einzelnen solchen TCP-Anwendung sein, da der Restore in mehreren Prozessen zugleich geschieht.\\
+Damit liegen zumindest die Checkpoint- und Restore-Zeiten für die Nicht-TCP-Anwendungen, für TCP-Verbindungen waren wir nicht in der Lage vergleichbare Zahlen zu finden, relevant über denen von Linux-CR - dort wurden auf älterer Hardware Restore-Zeiten von $\leq 1ms$ erreicht. Wir vermuten, dass dies auf die verschiedenen Ansätze zum Restoring zurückzuführen ist, insbesondere benötigt Linux-CR nicht die Injektion der Blobs durch \texttt{ptrace} und den damit verbundenen Overhead da Linux-CR direkt mit Kernel-Ressourcen arbeiten kann. Insbesondere heißt dies aber, dass, obwohl kontemporäre starke C/R-Tools recht lange Checkpoint- und Restore-Zeiten haben, diese nicht optimal sind und es noch Optimierungspotential in dieser Richtung gibt, wir können bei einer generellen Bewertung der Möglichkeiten von C/R-Fuzzing also noch mit einer Verbesserung dieser Werte rechnen.
+
+% Here are estimates for performance, as in "$T_{Restore} = x$. There are also comparisons to benchmarks for other fuzzing engines we found, especially Linux-CR which seems to have way better performance (though we were not able to get Linux-CR working on our machine so we have to rely on data from their paper). Short discussion what makes CRIU so much slower than Linux-CR and what performance depends on anyway.
 
 
 \section{CRIU + Fuzzing Engines}
