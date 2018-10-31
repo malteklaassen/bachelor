@@ -21,3 +21,5 @@ BCLR: https://cloudfront.escholarship.org/dist/prd/content/qt40v987j0/qt40v987j0
 Docker: https://criu.org/Docker
 
 TCP CR: https://lwn.net/Articles/495304/
+
+AddressSantifizer: https://github.com/google/sanitizers/wiki/AddressSanitizer

@@ -442,13 +442,45 @@ Damit liegen zumindest die Checkpoint- und Restore-Zeiten für die Nicht-TCP-Anw
 % Here are estimates for performance, as in "$T_{Restore} = x$. There are also comparisons to benchmarks for other fuzzing engines we found, especially Linux-CR which seems to have way better performance (though we were not able to get Linux-CR working on our machine so we have to rely on data from their paper). Short discussion what makes CRIU so much slower than Linux-CR and what performance depends on anyway.
 
 
-\section{CRIU + Fuzzing Engines}
-We have a quick look at modern fuzzing engines.\\
-Now, this is where it gets annoying: CRIU - or any other CR system - doesn't work with pretty much any modern fuzzing engines, most notably as they restore processes, not threads. To fix this we would either need 1. In-Process Thread-Restoring (and there are a few reasons why that probably isn't the best of all ideas - most notably shared ressources in different stats, shared memory where both code lives, ...) 2. Multi-Process Fuzzing Engines - yeah, we don't have those yet apparently.
+\section{TODO: CRIU + Fuzzing Engines}
+Schlussendlich wollen wir in diesem Kapitel nun einen Blick auf kontemporäre Fuzzing-Engines werfen, insbesondere ob ihrer Nutzbarkeit für C/R-Fuzzing mit gegebenen C/R-Tools, speziell CRIU. Die Fuzzing Engines die wir dabei betrachten werden sind afl-fuzz (american fuzzy lop) und libfuzzer.
+\subsection{Fuzzing-Engines}
+TODO: We have a quick look at modern fuzzing engines, well at least afl and libfuzzer\\
+\subsection{Fuzzing-Engines und C/R-Fuzzing}
+\subsubsection{libfuzzer}
+Um die Nutzbarkeit libfuzzers für C/R-Fuzzing zu testen implementierten wir ein simples Fuzz-Target wie in Kapitel 3.2.1, Listing 6, siehe Anhang [TODO]. Der Umweg des Inputdumpings ist zwingend notwendig, da libfuzzer den Input immer als Argument bei Aufruf übergibt. Bei der Ausführung ergaben sich jedoch bei uns einige Probleme:
+\begin{itemize}
+    \item Ist AddressSanitizer aktiviert so scheitert CRIU bereits in der ersten Ausführung während des Checkpointings: Eine Page wird als $\tilde 300GB$ groß erkannt, die Allokierung entsprechendes Speichers scheitert und damit auch das Pagemapping und das Pagedumping mittels des Parasitencodes (siehe Listing TODO). Dies liegt daran, dass AddressSanitizer 20TB virtuellen Speicher belegt. Restore-Versuche scheitern daran, dass das Image entsprechend nicht komplett ist, insbesondere \texttt{inventory.img}, die Top-Level-Beschreibung des Images, fehlt, siehe Listing TODO.
+    \item Die Nutzung von CRIU in libfuzzer führt dazu, dass Wiederherstellung mit korrekten PIDs scheitert - und die Einbettung in einen Fuzzer macht auch die Nutzung von einem entsprechenden PID-Namespace ein Ding der Unmöglichkeit.
+\end{itemize}
+\begin{lstlisting}[caption=Pagemapping/dumping Errors mit ASan]
+(00.010591) Error (criu/pagemap-cache.c:54): pagemap-cache: pmc_init: Can't allocate 30064246792 bytes
+(00.010597) Error (criu/pagemap-cache.c:85): pagemap-cache: Failed to init pagemap for 28814
+(00.010600) Error (criu/mem.c:516): Can't dump page with parasite
+\end{lstlisting}
+\begin{lstlisting}[caption=Restoring Error mit ASan]
+(00.000108) No inventory.img image
+(00.000133) Error (criu/util.c:693): Can't read link of fd -404: No such file or directory
+(00.000142) Error (criu/protobuf.c:75): Unexpected EOF on (null)
+\end{lstlisting}
+\begin{lstlisting}[caption=Restoring Error durch PID mismatch]
+(00.007567) Error (criu/cr-restore.c:1668): Pid 9177 do not match expected 8154
+(00.007683) Error (criu/cr-restore.c:2309): Restoring FAILED.
+\end{lstlisting}
+Selbst wenn diese Probleme gelöst werden sollten wäre eine Nutzbarkeit libfuzzers für C/R-Fuzzing, sowohl mit CRIU als auch anderen kontemporären C/R-Systemen, vorerst unklar, da libfuzzer zwar mit Multi-Threaded, aber nicht notwendigerweise korrekt mit Multi-Prozess-Anwendungen umgehen kann, eine allgemeine Nutzbarkeit, unabhängig von den zu testenden Programmen, unwahrscheinlich.
+\subsubsection{afl}
+Ebenso wie bei der Untersuchung libfuzzers implemetierten wir bei afl ein simples C/R-Fuzz-Target wie in Kapitel 3.2.1, Listing 6, siehe Anhang [TODO]. Das Inputdumping ist an dieser Stelle nicht notwendig, da afl die Übergabe des Inputs über einen FD erlaubt.\\
+Allerdings war es uns nicht möglich in afl auch nur den Checkpointing-Vorgang zu starten [TODO: Genau Analyse was da bei AFL schiefgeht, da arbeite ich grad noch dran... ich mag afl echt nicht].
 
-\section{Fazit und Ausblick}
-There still is room for research in this area, especially if higher performance C/R-Systems like Linux-C/R are a thing and once Multi-Process-Fuzzer exist.
+%Now, this is where it gets annoying: CRIU - or any other CR system - doesn't work with pretty much any modern fuzzing engines, most notably as they restore processes, not threads. To fix this we would either need 1. In-Process Thread-Restoring (and there are a few reasons why that probably isn't the best of all ideas - most notably shared ressources in different stats, shared memory where both code lives, ...) 2. Multi-Process Fuzzing Engines - yeah, we don't have those yet apparently.
+
+\subsection{Fazit}
+Doesn't work so far, mostly because of MP problems, also smaller issues with specific Fuzzing Engines and special tests. Short discussion of the concept of single-thread-restoring.
+
+\section{Ausblick}
+There still is room for research in this area, especially if higher performance C/R-Systems like Linux-C/R, Thread-Restoring are a thing and once Multi-Process-Fuzzer exist.
 
 \end{document}
 
-
+% TODO: Parallel Fuzzing?
+% TODO: TCP TTL?

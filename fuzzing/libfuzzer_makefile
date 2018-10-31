@@ -1,0 +1,3 @@
+CC = clang
+CFLAGS = -Wall -g -fsanitize=fuzzer,signed-integer-overflow 
+LDFLAGS = -lcriu
