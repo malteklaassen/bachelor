@@ -48,7 +48,7 @@
 \maketitle
 
 \begin{abstract}
-    NEEDS REWORK Fuzzing von komplexen Programmen als ganzes ist meist langsam, Fuzzing komplexer Programme in vielen kleinen Einzelblöcken ist aufwändig für den Tester da für sie jeweils die Fuzz-Targets geschrieben werden müssen. In diesem Stück Papier untersuchen wir die Nutzbarkeit von Checkpoint/Restore-Mechanismen zur Lösung solcher Probleme im Fuzzing, insb. mit Blick auf Netzwerkprotokolle mit einer wohldefinierten State Machine, präsentieren eine mögliche Architektur zum Fuzzen von Implemetierungen ebensolcher Protokolle und untersuchen verschiedene Fuzzer und Checkpoint/Restore Tools auf ihre Anwendbarkeit.
+    TODO Fuzzing von komplexen Programmen als ganzes ist meist langsam, Fuzzing komplexer Programme in vielen kleinen Einzelblöcken ist aufwändig für den Tester da für sie jeweils die Fuzz-Targets geschrieben werden müssen. In diesem Stück Papier untersuchen wir die Nutzbarkeit von Checkpoint/Restore-Mechanismen zur Lösung solcher Probleme im Fuzzing, insb. mit Blick auf Netzwerkprotokolle mit einer wohldefinierten State Machine, präsentieren eine mögliche Architektur zum Fuzzen von Implemetierungen ebensolcher Protokolle und untersuchen verschiedene Fuzzer und Checkpoint/Restore Tools auf ihre Anwendbarkeit.
 \end{abstract}
 
 \tableofcontents
@@ -354,7 +354,8 @@ CRIU findet unter anderem Anwendung in einigen prominenten Container-Anwendungen
 %CRIU is probably the only C/R tools that could make sense right now, two reasons why: 1. It's actually still getting updates and is actually easily useable on modern systems unlike many of the other things 2. It's capabilities exceed any other modern C/R tool
 \subsection{Nutzung}
 %TODO
-Es gibt zwei Kategorien wie CRIU genutzt werden kann:
+Es gibt zwei Kategorien wie CRIU genutzt werden kann:\\
+TODO RPC details
 \begin{itemize}
     \item Die Nutzung über das Command Line Interface ohne Remote Procedure Call beziehungsweise ohne CRIU Service
     \item Die Nutzung des RPCs entweder durch das CLI oder eine Programmiersprachen API, insbesondere die C-API
@@ -370,12 +371,47 @@ Unabhängig davon welcher der beiden Optionen man nutzt folgt das Checkpointing 
 Diese Optionen werden dann mit der entsprechenden Operation, beispielsweise Checkpointing (\texttt{criu dump}, \texttt{criu\_dump()}) oder Restoring (\texttt{criu restore}, \texttt{criu\_restore()}), kombiniert, diese wird dann von CRIU ausgeführt. Wird ein Shell-Job restored so wird dieser direkt an das laufende Terminal attached.
 
 \subsection{Funktionsweise}
-CRIU is Userspace 
+TODO\\
+CRIU is Userspace \\
 Detailed description of internal functionality of CRIU.
 \subsection{Capabilities}
+TODO\\
 What can we restore with CRIU? Pretty much any program, independent of language etc, does not require linking with some interception library, marking at start, ... CRIU also can restore pretty much any feature we could find, especially established TCP connection.
 \subsection{Probleme}
-It does not work out of the box in a fuzzing context, due to: 1. Firewall rules and resets, we can fix that by adding those manually after each iteration. 2. PIDs are already in use again. There could be two fixes here: Either putting it in it's own pid namespace or possibly by running it in a context that does not require exact PID matches, e.g. detached from the shell, ...
+Da CRIU nicht für eine Anwendung in Fuzzing- oder ähnlichen Hoch-Frequenz-Restoring-Kontexten entwickelt wurde entstehen bei der Anwendung zunächst ein paar Probleme:
+\begin{enumerate}
+    \item Das mehrfache Wiederherstellen eines Anwendungspaars mit etablierter TCP-Verbindung scheitert da die Verbindung bei späteren Restores resettet wird. Dies wird normalerweise, bei Checkpointing/Dumping und einfachem Restoring, durch entsprechende Firewallregeln, gesetzt direkt nach dem Dumping, verhindert, diese Regeln werden während des Restoring wieder entfernt. Bei weiteren Restores sind diese Regeln also nichtmehr vorhanden.
+    \item CRIU stellt Anwendungen unter der gleichen PID wie zum Zeitpunkt des Checkpointings wieder her - wurde diese PID aber nach dem Checkpointing und vor dem Restoring wieder vergeben so scheitert das Restoring.
+    \item Bei existierenden Netzwerkverbindungen ist zu beachten, dass diese zumeist eine beschränkte Lebenszeit haben, eine Zeit nach der die Verbindung geschlossen wird wenn keine Kommunikation statt findet. Diese Zeit wird beispielsweise für TCP-Verbindung unter Linux nicht in tatsächlicher Prozesslaufzeit gemessen sondern als Differenz zwischen gespeicherter Zeit für die letzte Kommunikation und momentaner Systemzeit berechnet - wenn nun also ein Prozess nach diesem Zeitfenster, der Linux-Default sind 7200 Sekunden, wiederhergestellt wird so wird die Verbindung direkt ob des Überschreitens der TCP Keepalive Time geschlossen.
+\end{enumerate}
+Glücklicherweise gibt es für diese Probleme Lösungen die eine Nutzung in einem Fuzzing-Umfeld ermöglichen sollten.\\
+Das TCP-RST-Problem lässt sich durch manuelles Setzen eben dieser Regeln direkt nach der Beendung der Ausführung der Anwendungen lösen, beispielsweise wie in Listing [TODO] zu sehen.
+\begin{lstlisting}[caption=Setzen der Firewallregeln, language=C]
+    // [...]
+
+    // create the netfilter rules & iptables calls
+    char iptables1[200], iptables2[200], iptables3[200], iptables4[200];
+    sprintf(iptables1, "iptables -A OUTPUT -s 127.0.0.1/32 -d 127.0.0.1/32 -p tcp -m mark ! --mark 0xc114 -m tcp --sport %i --dport %i -j DROP", clientport, serverport);
+    sprintf(iptables2, "iptables -A OUTPUT -s 127.0.0.1/32 -d 127.0.0.1/32 -p tcp -m mark ! --mark 0xc114 -m tcp --sport %i --dport %i -j DROP", serverport, clientport);
+    sprintf(iptables3, "iptables -A INPUT -s 127.0.0.1/32 -d 127.0.0.1/32 -p tcp -m mark ! --mark 0xc114 -m tcp --sport %i --dport %i -j DROP", clientport, serverport);
+    sprintf(iptables4, "iptables -A INPUT -s 127.0.0.1/32 -d 127.0.0.1/32 -p tcp -m mark ! --mark 0xc114 -m tcp --sport %i --dport %i -j DROP", serverport, clientport);
+
+    // [...]
+
+    // wait for restored processes to terminate
+    waitpid(serverpid, NULL, 0);
+    waitpid(clientpid, NULL, 0);
+    
+    // apply the netfilter rules
+    system(iptables1);
+    system(iptables2);
+    system(iptables3);
+    system(iptables4);
+\end{lstlisting}
+Die Problematik belegter PIDs lässt sich durch die Isolation der Anwendung durch beispielsweise eine virtuelle Maschine beziehungsweise einen Container oder die Nutzung von PID Namespaces lösen. 
+Unter Umständen ließe sich das PID-Problem auch durch die Deaktivierung der \texttt{--shell-job} Option lösen, dies würde jedoch das Ausführen der Anwendungen in einer eigenen Session erfordern - etwas das Fuzzing-Engines im Allgemeinen nicht unterstützen.\\
+Das TCP Keepalive Timeout und ähnliche Probleme ließen sich auf mehrere Arten und Weise lösen sollten sie ein Problem sein - entweder könnte die Zeit bis zum Timeout verlängert werden durch beispielsweise \texttt{echo \$new\_time\_in\_s > /proc/sys/net/ipv4/tcp\_keepalive\_time} auf einen genügend großen Wert oder durch Manipulation des Zeitpunktes der letzten Nachricht im Image.
+%It does not work out of the box in a fuzzing context, due to: 1. Firewall rules and resets, we can fix that by adding those manually after each iteration. 2. PIDs are already in use again. There could be two fixes here: Either putting it in it's own pid namespace or possibly by running it in a context that does not require exact PID matches, e.g. detached from the shell, ...
 \subsection{Performance}
 Bei der Betrachtung der Performance von C/R-Systemen gibt es zumeist zwei Komponenten zu betrachten: 
 \begin{itemize}
@@ -450,7 +486,7 @@ TODO: We have a quick look at modern fuzzing engines, well at least afl and libf
 \subsubsection{libfuzzer}
 Um die Nutzbarkeit libfuzzers für C/R-Fuzzing zu testen implementierten wir ein simples Fuzz-Target wie in Kapitel 3.2.1, Listing 6, siehe Anhang [TODO]. Der Umweg des Inputdumpings ist zwingend notwendig, da libfuzzer den Input immer als Argument bei Aufruf übergibt. Bei der Ausführung ergaben sich jedoch bei uns einige Probleme:
 \begin{itemize}
-    \item Ist AddressSanitizer aktiviert so scheitert CRIU bereits in der ersten Ausführung während des Checkpointings: Eine Page wird als $\tilde 300GB$ groß erkannt, die Allokierung entsprechendes Speichers scheitert und damit auch das Pagemapping und das Pagedumping mittels des Parasitencodes (siehe Listing TODO). Dies liegt daran, dass AddressSanitizer 20TB virtuellen Speicher belegt. Restore-Versuche scheitern daran, dass das Image entsprechend nicht komplett ist, insbesondere \texttt{inventory.img}, die Top-Level-Beschreibung des Images, fehlt, siehe Listing TODO.
+    \item Ist AddressSanitizer aktiviert so scheitert CRIU bereits in der ersten Ausführung während des Checkpointings: Eine Page wird als $\tilde 300GB$ groß erkannt, die Allokierung entsprechendes Speichers scheitert und damit auch das Pagemapping und das Pagedumping mittels des Parasitencodes (siehe Listing TODO). Dies liegt daran, dass AddressSanitizer 20TB virtuellen Speicher belegt. Restore-Versuche scheitern daran, dass das Image entsprechend nicht komplett ist, insbesondere \texttt{inventory.img}, die Top-Level-Beschreibung des Images, fehlt, siehe Listing TODO. % TODO Formatting
     \item Die Nutzung von CRIU in libfuzzer führt dazu, dass Wiederherstellung mit korrekten PIDs scheitert - und die Einbettung in einen Fuzzer macht auch die Nutzung von einem entsprechenden PID-Namespace ein Ding der Unmöglichkeit.
 \end{itemize}
 \begin{lstlisting}[caption=Pagemapping/dumping Errors mit ASan]
@@ -475,10 +511,21 @@ Allerdings war es uns nicht möglich in afl auch nur den Checkpointing-Vorgang z
 %Now, this is where it gets annoying: CRIU - or any other CR system - doesn't work with pretty much any modern fuzzing engines, most notably as they restore processes, not threads. To fix this we would either need 1. In-Process Thread-Restoring (and there are a few reasons why that probably isn't the best of all ideas - most notably shared ressources in different stats, shared memory where both code lives, ...) 2. Multi-Process Fuzzing Engines - yeah, we don't have those yet apparently.
 
 \subsection{Fazit}
-Doesn't work so far, mostly because of MP problems, also smaller issues with specific Fuzzing Engines and special tests. Short discussion of the concept of single-thread-restoring.
+Zusammenfassend lässt sich nun also feststellen, dass C/R-Fuzzing in der in dieser Arbeit beschriebenen Form noch vor einigen Problemen steht die einer Nutzung im Wege stehen. 
+Hierbei begegnen wir zwei Kategorien von Problemen: Erstens Probleme die aus der Wahl des Fuzzers und C/R-Systems resultieren beziehungsweise aus der Implementierung eben dieser resultieren, beispielsweise die Inkompatibilität von CRIU mit ASan ob des von ASan belegten Speichers oder die Belegung von benötigten PIDs zur Wiederherstellung durch libfuzzer. 
+Zweitens Probleme die aus der Architektur existierender Fuzzer und C/R-Systeme entstehen, insbesondere die Unmöglichkeit mit den betrachteten Fuzzern an wiederhergestellte Fuzz-Targets anzuknüpfen und diese, wie für das Fuzzing nötig, zu überwachen. 
+Erstere Klasse von Probleme ließen sich unter Umständen durch Workarounds, Anpassungen der Implemetierung oder Wahl eines anderen Systems umgehen, Zweitere würde, da diese Architekturentscheidungen von den meisten wenn nicht allen modernen und nutzbaren entsprechenden Systemen so getroffen wurden, die Nutzung oder sogar die Entwicklung eines Systems erfordern die eben nicht dieser Architektur folgt, beispielsweise ein C/R-System welches innerhalb eines Prozesses auf einzelnen Threads arbeitet oder ein Fuzzer der in der Lage ist an neue Kinder des Fuzz-Targets anzuknüpfen. Thread-C/R ist dabei nach unserer Einschätzung weniger vielversprechend, da, anders als Prozesse, Threads eben keine eigenständige Einheiten, sich Ressourcen mit anderen Threads teilen - dies würde ein C/R-System vor einige Probleme stellen wenn nur einige der Threads gecheckpointed werden und später wiederhergestellt werden, insbesondere die Frage welchen der Zustände Variablen etc annehmen sollen, den zum Zeitpunkt des Checkpointings oder den zum Zeitpunkt vor dem Restoring,  und wie damit umzugehen ist wenn vom restoreten Thread genutzter Speicher wieder vergeben wurde, dies würde zuerst eine Anpassung aller entsprechender Speicheradressen im Image erfordern - hierbei sollte bedacht werden, dass eine Differenzierung zwischen Speicheradresse und einfachem gespeicherten Wert in einer Momentaufname des Zustandes eines Threads nicht im Allgemeinen möglich ist.\\
+% Doesn't work so far, mostly because of MP problems, also smaller issues with specific Fuzzing Engines and special tests. Short discussion of the concept of single-thread-restoring.
 
 \section{Ausblick}
-There still is room for research in this area, especially if higher performance C/R-Systems like Linux-C/R, Thread-Restoring are a thing and once Multi-Process-Fuzzer exist.
+Auch wenn das Fazit zunächst etwas vernichtend klingen mag sollte die Idee des C/R-Fuzzing nicht ohne weitere, tiefergehende Betrachtung verworfen werden, da wir uns in dieser Arbeit, bedingt durch die Architekturen und Designentscheidungen populärer Fuzzer und C/R-Systeme, nur mit einer von vielen möglichen Facetten des C/R-Fuzzings in größerer Tiefe auseinandergesetzt haben: Mit der Kombination von Single-Process-Fuzzern mit Process-Level-C/R-Systemen und einer Implemetierung des C/R-Fuzzings im Fuzz-Target. Zwei Ansätze wären bei weiterer Betrachtung anderer dieser Facetten aus unserer Sicht besonders vielversprechend:
+\begin{itemize}
+    \item Die Nutzung oder Implementierung eines Multi-Process-Fuzzers, also Fuzzer die die Arbeit auf Anwendungen mit mehreren Prozessen erlauben% - diese wären notwendige Vorraussetzung für die Implementierung von C/R-Fuzzing im Fuzz-Target
+    \item Die Implemetierung eines dedizierten C/R-Fuzzers
+\end{itemize}
+Beide Ansätze würden die grundlegende Problematik der Inkompatibilität der von uns betrachteten Systeme beheben.\\
+Dies sollte jedoch, mit Blick auf die Performance im C/R-Fuzzing mit effizienten C/R-Systemen mit einer breiten Palette an Capabilities kombiniert werden - das ein solches C/R-System möglich ist hat Linux-CR gezeigt, für eine Weiterverfolgung des C/R-Fuzzings eine Wiederbelebung von Linux-CR oder eine Implementierung eines ähnlichen C/R-Systems also von hohem Interesse.
+%There still is room for research in this area, especially if higher performance C/R-Systems like Linux-C/R, Thread-Restoring are a thing and once Multi-Process-Fuzzer exist.
 
 \end{document}
 
