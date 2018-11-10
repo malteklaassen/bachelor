@@ -24,4 +24,6 @@ TCP CR: https://lwn.net/Articles/495304/
 
 PID Namespaces: http://man7.org/linux/man-pages/man7/pid_namespaces.7.html
 
+Kernel Features: https://criu.org/Linux_kernel
+
 AddressSantifizer: https://github.com/google/sanitizers/wiki/AddressSanitizer

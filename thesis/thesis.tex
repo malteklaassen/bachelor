@@ -15,6 +15,8 @@
 
 \usepackage{booktabs}
 
+\usepackage{url}
+
 \usetikzlibrary{arrows,automata}
 
 \lstset
@@ -371,9 +373,27 @@ Unabhängig davon welcher der beiden Optionen man nutzt folgt das Checkpointing 
 Diese Optionen werden dann mit der entsprechenden Operation, beispielsweise Checkpointing (\texttt{criu dump}, \texttt{criu\_dump()}) oder Restoring (\texttt{criu restore}, \texttt{criu\_restore()}), kombiniert, diese wird dann von CRIU ausgeführt. Wird ein Shell-Job restored so wird dieser direkt an das laufende Terminal attached.
 
 \subsection{Funktionsweise}
-TODO\\
-CRIU is Userspace \\
-Detailed description of internal functionality of CRIU.
+Wie bereits in der Übersicht verschiedener C/R-Systeme angeschnitten ist CRIU ein Userspace-C/R-Tool welches jedoch dabei Kernel-Features wie beispielsweise \texttt{prctl} aus dem \texttt{CONFIG\_CHECKPOINT\_RESTORE} Kernel-Feature oder die \texttt{TCP\_REPAIR}-Flag verwendet um Anwendungen möglichst vollständig wiederherstellen zu können ohne dabei eine komplette Kopie aller Kernelinformationen im Userspace aufbauen und permanent erhalten zu müssen wie dies beispielsweise bei DMTCP der Fall ist. 
+Dies bedeutet insbesondere auch, dass die zu checkpointene Anwendung weder zur Kompilierzeit noch zum Zeitpunkt des Anwendungsstartes sich der zukünftigen Checkpointopeartion bewusst sein muss und keine besonderen Vorbereitungen für das Checkpointen einer Anwendung getroffen werden müssen.
+Die von CRIU genutzten Kernel-Features sind im Mainline-Linux-Kernel enthalten und es sind sogar alle nötigen Features aktiviert, insbesondere \texttt{CONFIG\_CHECKPOINT\_RESTORE}, ein Feature welches eine Reihe von für C/R nützlichen Tools und Informationen enabled, beispielsweise \texttt{prctl} zur Manipulation von Prozessen oder eine Erweiterung der in \texttt{/proc/} verfügbaren Informationen beispielsweise um die \texttt{/proc/<pid>/map\_files} erweitert, \texttt{CONFIG\_NAMESPACES} sowie Features für diverse spezielle Namespaces, namentlich UTS, IPC, PID und Network Namespaces, sowie diverse Features zum Monitoring verschiedener Socket-Arten.\\
+Das Checkpointing folgt im Großen und Ganzen grob dem oben beschriebenen Muster:
+\begin{enumerate}
+    \item Einfrieren des Prozessbaumes. Dies geschieht auf eine von zwei Arten: Entweder, falls möglich, durch die Nutzung einer freezer cgroup, oder ansonsten durch das Traversieren des PID-Baumes in \texttt{/proc/} und anhalten der Prozesse durch die Nutzung der \texttt{PTRACE\_SEIZE} Anweisung.
+    \item Erfassen von Informationen wie den Virtuellen Speicherbereichen, Registern, \dots durch das Lesen entsprechender \texttt{/proc/} Einträge und ptrace.
+    \item Injektion eines Parasiten-Code-Blobs in die Anwendung mittels ptrace. Dieser Parasit kann nun die fehlenden Prozessinformationen extrahieren, hierfür wird die Anwendung kurzfristig wieder aufgetaut.
+    \item Entfernung des Parasiten mittels ptrace, Schreiben des Images und Fortsetzung der Ausführung der Anwendung.
+\end{enumerate}
+Der Parasit ist hierbei eine PIE welche mittels ptrace in die Anwendung injiziert wird. Dies geschieht in zwei Schritten: Zuerst wird ein Stück Code mittels ptrace so in die Anwendung injiziert, dass dieses nach dem Auftauen der Anwendung ausgeführt wird und somit Shared Memory für den eigentlichen Parasiten zur Verfügung stellen kann. Dann wird die Anwendung kurzfristig aufgetaut, das Shared Memory zur Verfügung gestellt und die Ausführung des Parasiten angestoßen. Der Parasit wartet auf Anweisung des CRIU-Prozesses, zumeist ob des Erfassens von Informationen wie Memory-Inhalten und Credentials, und führt diese aus. Zuletzt sendet der CRIU-Prozess noch eine \texttt{PARASITE\_CMD\_FINI} Anweisung an den Parasiten, dieser terminiert sich selbst und wird anschließen vom CRIU-Prozess durch das unmappen des Shared Memories entfernt.\\
+Das Restoring weicht etwas weiter vom oben beschriebenen Muster ab:
+\begin{enumerate}
+    \item Lesen des Images und Zuweisung von Shared Ressources zu Prozessen so das diese nur einmal wiederhergestellt werden.
+    \item Forken der CRIU-Anwendung um einen Prozessbaum entsprechend dem der Anwendung zu erzeugen.
+    \item Wiederherstellen eines Großteils der Prozessinformationen, insbesondere Speicherinhalte (jedoch nicht die exakten Mappings), Sockets, Namespaces, \dots
+    \item Ersetzen der Forks durch einen weiteren Code-Blob, den Restorer Context, Wiederherstellung aller verbleibender Informationen, insbesondere exakte Memory Mappings, Credentials, Operationen die von Credentials abhängen wie fork-with-pid und Threads durch den Restorer-Context, unmapping des Restorer-Context und Fortsetzen der planmäßigen Ausführund der Anwendung.
+\end{enumerate}
+Der Restorer-Blob ist, ebenso wie der Parasit, ein PIE-kompiliertes Stück Code welches kurzfristig in Shared Memory im Anwendungsprozess lebt um dort Aufgaben der CRIU-Anwendung zu übernehmen. Dabei agiert der Restorer-Context als Verbindungsstück zwischen dem CRIU-Fork und dem eigentlich Anwendungsprozess und reorgansiert beispielsweise die bereits in Schritt 3 gefüllten VMAs so dass die Mappings mit der Anwendung übereinstimmen oder stellt die korrekten PIDs wieder her.\\
+Die entstehenden CRIU Images bestehen aus mehreren Dateien organsiert in dem beim Checkpointing spezifizierten Ordner, diese fallen in drei Kategorien: Dateien im Protobuff-Format welche einen Großteil der eigentlichen Checkpoint-Informationen enthalten wie zum Beispiel generelle Checkpointing Informationen in \texttt{inventory.img} oder Informationen über die Credentials wie uid in \texttt{creds.img}, CRIU-spezifische Binary-Images welche beispielsweise die Memory-Inhalte und Pagemaps enthalten und Dateien die durch Drittparteianwendungen generiert wurden uns beispielsweise Routing- und Netzwerkinformationen enthalten.
+
 \subsection{Capabilities}
 TODO\\
 What can we restore with CRIU? Pretty much any program, independent of language etc, does not require linking with some interception library, marking at start, ... CRIU also can restore pretty much any feature we could find, especially established TCP connection.
@@ -481,7 +501,20 @@ Damit liegen zumindest die Checkpoint- und Restore-Zeiten für die Nicht-TCP-Anw
 \section{TODO: CRIU + Fuzzing Engines}
 Schlussendlich wollen wir in diesem Kapitel nun einen Blick auf kontemporäre Fuzzing-Engines werfen, insbesondere ob ihrer Nutzbarkeit für C/R-Fuzzing mit gegebenen C/R-Tools, speziell CRIU. Die Fuzzing Engines die wir dabei betrachten werden sind afl-fuzz (american fuzzy lop) und libfuzzer.
 \subsection{Fuzzing-Engines}
-TODO: We have a quick look at modern fuzzing engines, well at least afl and libfuzzer\\
+Die hier betrachteten Fuzzing Engines libfuzzer und afl wurden von uns ausgewählt, da sie zwei der etablierteren Fuzzing Engines sind. 
+Beide haben zur Auffindung einer ganzen Reihe von Bugs beigetragen und sind Teil von Googles OSS-Fuzz-Projekts - ein Projekt welches durch kontinuierliches Fuzzing durch Google versucht die Sicherheit und Stabilität von relevanter Open Sourcen Software zu verbessern.
+Sowohl libfuzzer als auch afl folgen im allgemeinen der obigen Beschreibung von Fuzzern, unterscheiden sich jedoch in der exakten Umsetzungen in einigen Punkten.
+\subsubsection{Funktionsweise: libfuzzer}
+Die Nutzung libfuzzers folgt einem recht strikten aber simplen Schema dank der Integration in das llvm-Projekt und insbesondere in dessen Frontend, clang:
+\begin{enumerate}
+    \item Schreibe ein Fuzz-Target, ein Stück Code welches eine zu fuzzende Funktion, in Normalfall \texttt{LLVMFuzzerTestOneInput}, zur Verfügung stellt welche als Argumente ein Array von \texttt{uint8\_t} und die Länge dieses Arrays in \texttt{size\_t} erwartet. 
+    \item TODO
+\end{enumerate}
+TODO
+\subsubsection{afl}
+TODO
+
+
 \subsection{Fuzzing-Engines und C/R-Fuzzing}
 \subsubsection{libfuzzer}
 Um die Nutzbarkeit libfuzzers für C/R-Fuzzing zu testen implementierten wir ein simples Fuzz-Target wie in Kapitel 3.2.1, Listing 6, siehe Anhang [TODO]. Der Umweg des Inputdumpings ist zwingend notwendig, da libfuzzer den Input immer als Argument bei Aufruf übergibt. Bei der Ausführung ergaben sich jedoch bei uns einige Probleme:
@@ -526,6 +559,60 @@ Auch wenn das Fazit zunächst etwas vernichtend klingen mag sollte die Idee des 
 Beide Ansätze würden die grundlegende Problematik der Inkompatibilität der von uns betrachteten Systeme beheben.\\
 Dies sollte jedoch, mit Blick auf die Performance im C/R-Fuzzing mit effizienten C/R-Systemen mit einer breiten Palette an Capabilities kombiniert werden - das ein solches C/R-System möglich ist hat Linux-CR gezeigt, für eine Weiterverfolgung des C/R-Fuzzings eine Wiederbelebung von Linux-CR oder eine Implementierung eines ähnlichen C/R-Systems also von hohem Interesse.
 %There still is room for research in this area, especially if higher performance C/R-Systems like Linux-C/R, Thread-Restoring are a thing and once Multi-Process-Fuzzer exist.
+
+\section{Anhang}
+TODO
+
+\begin{thebibliography}{15}
+    \bibitem{facebook}
+        Heather Kelly. 
+        \textit{Facebook hack exposed 50 million users' info -- and accounts on other sites}.
+        CNN Business, 2018. \path{https://money.cnn.com/2018/09/28/technology/facebook-breach-50-million/index.html}
+    \bibitem{ransomware}
+        \textit{Cyberangriff "WannaCry" - Hochfahren, einloggen, hoffen}
+        Tagesschau, 2017. \path{https://www.tagesschau.de/ausland/wannacry-microsoft-103.html}.
+    \bibitem{heartbleed}
+        Ole Reißmann.
+        \textit{OpenSSL-Sicherheitslücke - Warum "Heartbleed" Millionen Web-Nutzer gefährdet}.
+        Spiegel Online, 2014. \path{http://www.spiegel.de/netzwelt/web/heartbleed-openssl-fehler-verraet-passwoerter-a-963381.html}
+    \bibitem{securitymethods}
+        B. Potter, G. McGraw.
+        \textit{Software Security Testing},
+        IEEE Security \& Privacy, vol. 2, no. 5, pp. 81-85, 2004. \path{https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=1341418}
+    \bibitem{randominput}
+        Joe W. Duran, Simeon Ntafos.
+        \textit{A report on random testing},
+        ICSE '81 Proceedings of the 5th international conference on Software, pp. 179-183, 1981. \path{https://dl.acm.org/citation.cfm?id=802530}
+    \bibitem{fuzzinghistory}
+        Ari Takanen. \textit{Fuzzing: the Past, the Present and the Future}. 
+        Actes du 7ème symposium sur la sécurité des technologies de l'information et des communications (SSTIC), pp. 202-212 2009. \path{https://codeengn.com/archive/Reverse%20Engineering/Fuzzing/Fuzzing%20the%20Past,%20the%20Present%20and%20the%20Future%20[Ari%20Takanen].pdf}
+    \bibitem{dmtcp}
+        Jason Ansel, Kapil Arya, Gene Cooperman.
+       \textit{DMTCP: Transparent Checkpointing for Cluster Computations and the Desktop}.
+        23rd IEEE international parallel and distributed processing symposium, Rome, Italy, pp. 1–12, 2009.\path{http://dmtcp.sourceforge.net/papers/dmtcp.pdf}
+    \bibitem{linuxcr}
+        Oren Laadan, Serge E. Hallyn.
+        \textit{Linux-CR: Transparent Application Checkpoint-Restart in Linux}
+        Proceedings of the Linux Symposium, Ottawa, Canada, pp. 159-172, 2010.
+        \path{http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.366.6842&rep=rep1&type=pdf#page=159}
+    \bibitem{BCLR}
+        Jason Duell.
+        \textit{The design and implementation of Berkeley Lab's linux checkpoint/restart}.
+        Lawrence Berkeley National Laboratory, 2005. \path{https://escholarship.org/uc/item/40v987j0}
+    \bibitem{tcpcr}
+        Jonathan Corbet.
+        \textit{TCP connection repair}.
+        lwn.net, 2012. \path{https://lwn.net/Articles/495304/}
+    \bibitem{pidns}
+        \textit{Man page: pid namespaces}.
+        Linux Man Pages. \path{http://man7.org/linux/man-pages/man7/pid_namespaces.7.html}
+    \bibitem{adsan}
+        Konstantin Serebryany, Derek Bruening, Alexander Potapenko, Dmitry Vyukov.
+        \textit{AddressSanitizer: A Fast Address Sanity Checker}.
+        Usenix Annual Technical Conference, 2012. \path{https://storage.googleapis.com/pub-tools-public-publication-data/pdf/37752.pdf}
+
+
+\end{thebibliography}
 
 \end{document}
 
