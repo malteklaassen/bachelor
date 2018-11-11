@@ -27,3 +27,7 @@ PID Namespaces: http://man7.org/linux/man-pages/man7/pid_namespaces.7.html
 Kernel Features: https://criu.org/Linux_kernel
 
 AddressSantifizer: https://github.com/google/sanitizers/wiki/AddressSanitizer
+
+2015libfuzzer: http://blog.llvm.org/2015/04/fuzz-all-clangs.html
+
+asan+afl: https://lwn.net/Articles/657959/

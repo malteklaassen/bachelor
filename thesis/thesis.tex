@@ -6,6 +6,7 @@
 \usepackage{color}
 \usepackage{amsmath}
 \usepackage{tikz}
+\usepackage{enumerate}
 
 \usepackage[utf8]{inputenc}
 
@@ -50,135 +51,184 @@
 \maketitle
 
 \begin{abstract}
-    TODO Fuzzing von komplexen Programmen als ganzes ist meist langsam, Fuzzing komplexer Programme in vielen kleinen Einzelblöcken ist aufwändig für den Tester da für sie jeweils die Fuzz-Targets geschrieben werden müssen. In diesem Stück Papier untersuchen wir die Nutzbarkeit von Checkpoint/Restore-Mechanismen zur Lösung solcher Probleme im Fuzzing, insb. mit Blick auf Netzwerkprotokolle mit einer wohldefinierten State Machine, präsentieren eine mögliche Architektur zum Fuzzen von Implemetierungen ebensolcher Protokolle und untersuchen verschiedene Fuzzer und Checkpoint/Restore Tools auf ihre Anwendbarkeit.
+    Fuzzing hat sich in den letzten Jahren als mächtige Methode zum Auffinden möglicher Sicherheitslücken in Software etabliert. 
+    Bei der Anwendung von Fuzzing auf Applikationen mit längerem Setup oder komplexerem internen Zustandsmodell stößt Fuzzing allerdings schnell auf Performanceprobleme oder versucht höheren manuellen Testaufwand. 
+    Wir untersuchen in dieser Arbeit inwieweit Checkpoint/Restore die genannten Probleme des Fuzzing mitigieren kann. 
+    Nach einer Zusammenfassung derzeitiger Fuzzing- und C/R-Konzepte stellen wir die Struktur eines integrierten C/R-Fuzzers dar.
+    Weiterhin präsentieren wir einen generischen Ansatz C/R innerhalb klassischer Fuzzing-Engines zu verwenden. Diesen erweitern wir für die spezifische Problemklasse des Testens von Client-Server-Systemen. 
+    Beispielhaft untersuchen wir eine Integration von CRIU als prominentes C/R-System in LLVM libFuzzer und afl.
+    Wir präsentieren Performancemessungen für CRIU und legen auftretende Probleme versuchter Integrationen dar.
 \end{abstract}
 
 \tableofcontents
 
 \section{Einleitung}
 
-Mit zunehmender Prävalenz und Prominenz von IT-Systemen ist das Thema der Sicherheit eben dieser Systeme zunehmend in den Fokus gerückt, sowohl in Fällen häufig fehlerbehafteter Nutzung von Sofware in denen Nutzer selbst, direkt betroffen sind wie bei Hacks oder Leaks bei Online-Plattformen wie Facebook oder Malware-Kampagnen wie WannaCry, häufig ausgelöst durch technische Sicherheitslücken und verzögerte Patches, als auch vereinzelt in Fällen von rein technischen Sicherheitslücken wie beispielsweise Heartbleed.\\
-Proaktiv vs Reaktiv\\
-Über die Jahrzehnte haben sich dabei verschiedene Ansätze und Methoden zur proaktiven Erkennung, Behebung und Verhinderung von ebensolchen Sicherheitsproblemen entwickelt, beispielsweise:
+Mit zunehmender Prävalenz und Prominenz von IT-Systemen ist das Thema der Sicherheit eben dieser Systeme zunehmend in den Fokus gerückt. 
+In der öffentlichen Wahrnehmung stehen zumeist Fälle im Fokus, die Nutzer direkt betreffen. 
+Prominente Beispiele sind Hacks oder Leaks bei Online-Plattformen wie Facebook\cite{facebook} oder Malware-Kampagnen wie WannaCry\cite{ransomware}, zumeist ausgelöst durch Probleme in der Operational Security und verzögerte Patches.
+Seltener in der Öffentlichkeit stehen die tatsächlichen technischen Sicherheitslücken, die diesen zugrunde liegen - wenn dann nur in Fällen mit starker Öffentlichkeitswirkung wie beispielsweise Heartbleed\cite{heartbleed}.\\
+Bei dem Umgang mit derartigen Sicherheitsproblemen gibt es zwei dominante Klassen von Strategien: Proaktive Strategien, welche versuchen, mögliche Probleme und Sicherheitslücken als ganzes zu verhindern, und reaktive Strategien, welche versuchen, die Effekte von Sicherheitslücken zu mindern und eine Ausnutzung zu erschweren.
+Über die Jahrzehnte haben sich dabei verschiedene Ansätze und Methoden zur proaktiven Erkennung, Behebung und Verhinderung von diesen Sicherheitsproblemen entwickelt, beispielsweise\cite{securitymethods}:
 \begin{itemize}
 \item Formulierung von Sicherheitsanforderungen bereits während und vor der Designphase
-\item Formale Beweise beispielsweise bei kryptografischen oder Netzwerk-Protokollen oder sogar von Programmen, insbesondere in der Funktionalen Programmierung
-\item Compilerchecks und -safeguards sowie statische Codeanaylse
+\item Formale Beweise, beispielsweise bei kryptografischen oder Netzwerk-Protokollen oder sogar von Programmen, insbesondere in der Funktionalen Programmierung
+\item Compilerchecks und -safeguards sowie statische Codeanalyse
 \item (Externe) Reviews der Software und Penetrationtesting
 \item Klassisches Sicherheitstesting
 \end{itemize}
-Leider sind nicht immer alle diese Methoden anwendbar und haben jeweils ihre eigenen Stärken und Schwächen. So sind Formale Beweise der Sicherheit von Programmen außerhalb von einigen modernen Hochsprachen häufig nicht möglich, klassisches Sicherheitstesting ist zumeist beschränkt auf die Vorstellungskraft des Testers beziehungsweise auf sein Verständnis der zu testenden Software, Grenzfällen oder komplett unerwartete aber mögliche Eingaben sind mit klassischem Testing schwer umfassend abzudecken.\\
+Leider sind nicht immer alle diese Methoden anwendbar und haben jeweils ihre eigenen Stärken und Schwächen. So sind formale Beweise der Sicherheit von Programmen außerhalb von einigen modernen Hochsprachen häufig nicht möglich. Klassisches Sicherheitstesting, zum Beispiel mithilfe von Runtime-Sanitizer-Checks, ist zumeist beschränkt auf die Vorstellungskraft des Testers beziehungsweise auf sein Verständnis der zu testenden Software; Grenzfälle oder komplett unerwartete, aber mögliche, Eingaben sind mit klassischem Testing schwer umfassend abzudecken.\\
 
-\subsection{Fuzzing}
-
-TODO: Corpus, Seeds, Dictionaries
-
-Fuzzing ist eine Test-Methode die teil-automatisiert versucht genau diese Art von mit klassischen Test-Methoden schwer abzudeckenden Fällen umfassend zu erkennen indem, statt wie im klassischen Testing nur in von Menschen mehr oder weniger präzise beschriebenen Testfällen getestet wird, ein Codestück, das so genannte Fuzz-Target, wiederholt mit computergenerierten zufälligen Inputs getestet wird, dabei wird die Ausführung genau von Fuzzer überwacht um beispielsweise Programmabstürze, das Lesen aus unitialisiertem Speicher oder auch undefiniertes Verhalten zu Erkennen und zu der problematischen Codestelle zurück zu verfolgen.
+\section{Fuzzing}
+Fuzzing ist eine Test-Methode, die teil-automatisiert versucht, genau diese Art von mit klassischen Test-Methoden schwer abzudeckenden Fällen umfassend zu erkennen, indem, (statt wie im klassischen Testing, bei dem nur von Menschen mehr oder weniger präzise beschriebene Testfälle ausgeführt werden) ein Codestück, das so genannte Fuzz-Target, wiederholt mit computergenerierten zufälligen Inputs getestet wird. 
+Dabei wird die Ausführung vom Fuzzer überwacht, um beispielsweise Programmabstürze, das Lesen aus unitialisiertem Speicher oder auch undefiniertes Verhalten zu erkennen und zu der problematischen Codestelle zurück zu verfolgen.
 
 \subsection{Klassifizierung von Fuzzern}
-Fuzzer werden anhand mehrerer Eigenschaften unterschieden, insbesondere ob sie sich beim Testen der Struktur des Programmes und der Struktur der erwartetenden Eingaben bewusst sind. Hierbei
+Es gibt eine ganze Reihe von Ansätzen zur Klassifizierung von Fuzzern anhand verschiedener Kriterien und entlang verschiedener Achsen. Wir haben uns für diese Arbeit für eine Klassifizerung anhand zweier Eigenschaften entschieden: Ob sich ein Fuzzer beim Testen der Struktur des Programmes und der Struktur der erwartenden Eingaben bewusst ist.
 \begin{itemize}
-    \item Wenn der Fuzzer sich der Struktur des Programmes bewusst ist und dieses Wissen im Testing nutzt um bessere Code-Coverage zu erreichen spricht man, je nach Technologie, von einem White-Box- oder Gray-Box-Fuzzer. Besitzt der Fuzzer keine Kenntnisse über die Programmstruktur und generiert programmunabhängige Zufallsinputs spricht man von einem Black-Box-Fuzzer.
-    \item Wenn der Fuzzer sich der erwarteten Struktur des Inputs, beispielsweise bei einem bestimmten Dateiformat oder Netzwerkprotokoll, bewusst ist spricht man von einem Smart Fuzzer, ansonsten von einem Dumb Fuzzer.
+    \item Wenn der Fuzzer sich der Struktur des Programmes bewusst ist und dieses Wissen im Testing nutzt, um bessere Code-Coverage zu erreichen, spricht man von einem White-Box- oder Gray-Box-Fuzzer\footnote{Diese Art des Fuzzings wird auch als Coverage-Guided-Fuzzing bezeichnet.}, je nach Technologie.
+        Besitzt der Fuzzer keine Kenntnisse über die Programmstruktur und generiert programmunabhängige Zufallsinputs, spricht man von einem Black-Box-Fuzzer.
+    \item Wenn der Fuzzer sich der erwarteten Struktur des Inputs, beispielsweise bei einem bestimmten Dateiformat oder Netzwerkprotokoll, bewusst ist, spricht man von einem Smart Fuzzer, ansonsten von einem Dumb Fuzzer. Häufig kann dieses Wissen und Informationen darüber, wie Inputs generiert werden sollen beim Start des Fuzzers diesem als sogenanntes Dictionary übergeben werden.
 \end{itemize}
-Die meisten modernen Fuzzer können sowohl als Black- als auch als Gray- beziehungsweise White-Box-Fuzzer und sowohl als Smart als auch als Dumb Fuzzer agieren, diese Terme werden zumeist auch zur Beschreibung von Operationsmodi ebensolcher moderner Fuzzer verwendet.
+Die meisten modernen Fuzzer können sowohl als Black- als auch als Gray- beziehungsweise White-Box-Fuzzer und sowohl als Smart als auch als Dumb Fuzzer betrieben werden, diese Terme werden zumeist auch zur Beschreibung von Operationsmodi moderner Fuzzer verwendet. 
+Neue Inputs werden beim anhand der verfügbaren Informationen, also Dictionaries und dem bisher bekannten Corpus, einer Sammlung von bereits bekannten, interessanten Testfällen, generiert. 
+Diese Generierung geschieht beispielsweise durch die Mutation oder Kombination von alten Inputs.
+Wird ein solcher Input bei der Ausführung, beispielsweise durch die Code-Coverage-Untersuchung, als interessant für das weitere Fuzzing bewertet so wird dem Corpus für die weitere Generierung von neuen Inputs hinzugefügt.
 
 \subsection{Historischer Überblick}
-Testing mit randomisierten Inputs ist kein sonderlicher neuer Ansatz, jedoch ist die Effizienz von naivem Random Input Test (also Black-Box-Fuzzing) offensichtlich beschränkt und der größte Teil der Fehler die dauf diese Art und Weise gefunden werden können relativ simpel und selten in den Tiefen des Programmes versteckt, das heißt es handelt sich zumeist um Fehler die vergleichsweise simpel auch durch Code-Reviews oder klassische Tests gefunden werden könnten, entsprechenden hatte Random Input Testing für recht lange Zeit nur eine relativ geringe Relevanz, sowohl in der Qualitätssicherung als auch in der Sicherheitsforschung.\\
-Mit dem Aufkommen von effizienteren Gray- und White-Box-Fuzzern und zunehmender Relevanz von IT-Sicherheit in den späten 2000ern entwickelte sich ein breiteres Interesse an Fuzzing, inklusive einiger Open Source Fuzzern und Fuzzing Frameworks, hin zu Fuzzing als Kernbestandteil des Sicherheits-Testings vieler relevanter Open Source Software Projekte, vorrangetrieben insbesondere durch Projekte wie Googles OSS-Fuzz, ein Service zum kontinuierlichen Testen verschiedenster Open Source Software durch mehrere verschiedene Fuzzer.
+Testing mit randomisierten Inputs ist kein sonderliche neuer Ansatz, jedoch ist die Effizienz von naivem Random Input Test (also Black-Box-Fuzzing) offensichtlich beschränkt, und der größte Teil der Fehler, die auf diese Art und Weise gefunden werden können, ist relativ simpel und selten in den Tiefen des Programmes versteckt. 
+Das heißt, es handelt sich zumeist um Fehler, die vergleichsweise einfach auch durch Code-Reviews oder klassische Tests gefunden werden könnten. 
+Entsprechend hatte Random Input Testing für recht lange Zeit nur eine relativ geringe Relevanz, sowohl in der Qualitätssicherung als auch in der Sicherheitsforschung.\\
+Mit dem Aufkommen von effizienteren Gray- und White-Box-Fuzzern und zunehmender Relevanz von IT-Sicherheit in den späten 2000ern entwickelte sich ein breiteres Interesse an Fuzzing. Es entstanden einige Open Source Fuzzern und Fuzzing-Frameworks und Fuzzing wurde Kernbestandteil des Sicherheits-Testings vieler relevanter Open Source Software Projekte, vorangetrieben insbesondere durch Projekte wie Googles OSS-Fuzz, ein Service zum kontinuierlichen Testen verschiedenster Open Source Software durch mehrere verschiedene Fuzzer.
 
 \subsection{Beschränkungen im Fuzzing}
-Leider ist natürlich auch Fuzzing nicht ohne Probleme und Beschränkungen. Da Fuzzing zu großen Teilen darauf beruht eine große Menge an Eingaben zu Testen sinkt die Effizienz des Fuzzings deutlich wenn die Ausführug des Fuzz-Targets zu lange dauert. Dies führt dazu, dass das Fuzzen komplizierter, insbesondere interaktiver Systeme nicht ohne weiteres effizient möglich ist. Dieses Problem wird zumeist gelöst indem man komplexe Systeme in kleinere, simple Subsysteme aufteilt und diese unabhängig voneinander fuzzt und so beispielsweise unnötigen Overhead im Setup des Fuzz-Targets vermeidet. Aber auch dies hat seine Nachteile: Der Tester muss hier nun mit der Struktur des zu testenden Systems bekannt sein, muss das komplexe System in kleinere Systeme selbst zerlegen und dann für jedes der Subsysteme einzelne Fuzz-Targets schreiben - dies ist zeit- und arbeitsaufwändig und, ähnlich wie beim klassischen Testing, anfällig für Fehler des Testers. 
+Leider ist natürlich auch Fuzzing nicht ohne Probleme und Beschränkungen. 
+Da Fuzzing zu großen Teilen darauf beruht, eine große Menge an Eingaben zu testen, sinkt die Effizienz des Fuzzings deutlich, wenn die Ausführung des Fuzz-Targets zu lange dauert. 
+Dies trägt dazu bei, dass das Fuzzen komplizierter, insbesondere interaktiver Systeme nicht ohne weiteres effizient möglich ist. 
+Dieses Problem wird zumeist gelöst, indem man komplexe Systeme in kleinere, simple Subsysteme aufteilt und diese unabhängig voneinander fuzzt. So wird beispielsweise unnötiger Overhead im Setup des Fuzz-Targets vermieden. 
+Dies hat aber natürlich auch Nachteile: Dem Tester muss hier nun die Struktur des zu testenden Systems bekannt sein, er muss das komplexe System in kleinere Systeme selbst zerlegen und dann für jedes der Subsysteme einzelne Fuzz-Targets definieren - dies ist zeit- und arbeitsaufwändig und, ähnlich wie beim klassischen Testing, anfällig für Fehler des Testers. 
+
+\subsection{LLVM libFuzzer}
+%TODO
+LLVM libFuzzer ist eine moderne Fuzzing-Engine 
+
+\subsection{american fuzzy lop}
+%TODO
 
 \section{Checkpoint/Restore}
-
-Mit Checkpoint/Restore, kurz C/R, manchmal auch Checkpoint/Restart, bezeichnet man das Speichern eines Prozesses oder einer Andwendung in einer Art und Weise die eine spätere Wiederherstellung und weitere Ausführung der Anwendung erlaubt.
-C/R-Systeme finden Anwendung in verschiedenen Bereichen, beispielsweise im Debugging und Fault Recovery durch das Zurücksetzen eines Programmes auf einen vorherigen Zustand, in der Beschleunigung oder Optimierung von Prozessen durch das Fortsetzen von Anwendungen von Checkpoints anstatt rechenzeitaufwändigen Komplettausführungen und dem Aussetzen der Ausführung von Programmen wenn diese grade nicht benötigt werden oder, je nach Fähigkeiten des zugrundeliegenden C/R-Systems, sogar die Migration von laufenden Anwendungen zwischen Maschinen.
-
-TODO: Was alles muss gespeuchert werden? 
+Mit Checkpoint/Restore, kurz C/R, manchmal auch Checkpoint/Restart, bezeichnet man das Speichern eines Prozesses oder einer Anwendung in einer Art und Weise, die eine spätere Wiederherstellung und Weiterausführung der Anwendung erlaubt.
+C/R-Systeme finden Anwendung in verschiedenen Bereichen:
+\begin{itemize}
+    \item Im Debugging und in der Fault Recovery durch das Zurücksetzen eines Programmes auf einen vorherigen Zustand
+    \item In der Beschleunigung oder Optimierung von Prozessen durch das Checkpoint-basierte Fortsetzen von Anwendungen anstelle von rechenzeitaufwändigen Komplettausführungen
+    \item Im der Optimierung von Anwendungen durch Aussetzen der Ausführung von Programmen wenn diese gerade nicht benötigt werden
+    \item In der Migration von Prozessen zwischen verschiedenen Maschinen
+\end{itemize}
 
 \subsection{C/R Typen und Unterscheidungen}
-Für das Checkpointing/Restoring von Anwendungen gibt es nicht einen einzelnen Standard sondern eine ganze Reihe von Modellen die wir grob nach zwei Faktoren klassifizieren: Typ bzw. Implemetierungsebene und nach den Fähigkeiten des Checkpoint/Restore-Systems, also welche Aspekte des Programms genau wiederhergestellt werden können und welche nicht.
+Für das Checkpointing/Restoring von Anwendungen gibt es nicht einen einzelnen Standard, sondern eine ganze Reihe von Modellen, die wir grob anhand von zwei Faktoren klassifizieren: Zum einen der Typ beziehungsweise die Implementierungsebene, zum anderen die Capabilities des Checkpoint/Restore-Systems, also welche Aspekte des Programms genau wiederhergestellt werden können und welche nicht.
 
 \subsubsection{Nach Typ}
-Bei der Klassifizierung nach Typ oder Implemetierungsebene unterscheiden wir grob nach drei Kategorien: Das Checkpointen im Userspace, aus dem zu checkpointenen Programm selbst, das Checkpointen auf Kernelebene und das Checkpointen von Virtuellen Maschinen beziehungsweise Containern.\\ \\
+Bei der Klassifizierung nach Typ oder Implementierungsebene unterscheiden wir grob drei Kategorien: 
+\begin{itemize}
+    \item Das Checkpointen im Userspace, also aus dem zu checkpointenden Programm selbst
+    \item Das Checkpointen auf Kernelebene beziehungsweise durch den Kernel
+    \item Das Checkpointen von Virtuellen Maschinen beziehungsweise Containern
+\end{itemize}
 %\subsubsubsection{Userspace-C/R}
-Im klassischen Userspacecheckpointing findet das Checkpointing größtenteils transparent gegenüber dem Kernel statt, das heißt das C/R-Tool nutzt aus dem Userspace zugängliche Ressourcen wie \texttt{/proc/} oder Intercepts von Library- oder Syscalls zum sammeln der notwendigen Checkpoint-Informationen und ebenfalls nur ohne besondere Privilegien zugängige Ressourcen zur Wiederherstellung. 
-Dieses Vorgehen führt in reinen Userspace-C/R-Systemen wie DMTCP (Distributed MultiThreaded CheckPointing) unter Umständen zu einigen Fallstricken oder Problemen, so können zum Beispiel nicht alle Eigenschaften eines Programmes, beispielsweise die PID, nicht ohne weiteres korrekt wiederhergestellt werden, die Intercepts benötigen alternative Libraries die spätestens zur Startzeit mit der Anwendung gelinkt werden müssen, häufig Beschränkungen darauf haben mit welchen Programmen (bspw. Sprachen) sie genutzt werden können und unter Umständen die Funktionsweise des Programmes ändern könnten sowie mögliche Performanceeinbußen durch das duplizieren von Kernelstrukturen im Userspace.\\ \\
+Im klassischen Userspace-Checkpointing findet der Checkpointing-Prozess größtenteils transparent gegenüber dem Kernel statt, das heißt das C/R-Tool nutzt aus dem Userspace zugängliche Ressourcen wie \texttt{/proc/} oder Intercepts von Library- oder Syscalls zum Sammeln der notwendigen Checkpoint-Informationen und es nutzt ebenfalls nur ohne besondere Privilegien zugängige Ressourcen zur Wiederherstellung. 
+Dieses Vorgehen führt in reinen Userspace-C/R-Systemen wie DMTCP (Distributed MultiThreaded CheckPointing) unter Umständen zu einigen Fallstricken oder Problemen. 
+So können zum Beispiel nicht alle Eigenschaften eines Programmes, beispielsweise die PID, nicht ohne weiteres korrekt wiederhergestellt werden. 
+Die Intercepts benötigen alternative Libraries, die erstens spätestens zur Startzeit mit der Anwendung gelinkt werden müssen, zweitens häufig Beschränkungen darauf haben mit welchen Programmen (bspw. Sprachen) sie genutzt werden können und drittens unter Umständen die Funktionsweise des Programmes ändern könnten. Zudem sind Performanceeinbußen durch das Duplizieren von Kernelstrukturen im Userspace zu erwarten.\\ \\
 %\subsubsubsection{Kernelebene-C/R}
-Dem gegenüber steht das Checkpointing auf Kernelebene, beispielsweise BLCR (Berkeley Lab's Linux Checkpoint/Restart) oder Linux-C/R.
-C/R-Systeme nutzen den Kernel direkt um alle nötigen Informationen wärend des Checkpointings zu sammeln, benötigen also keine Libraries zum Sammeln eben dieser Informationen durch das Abfangen von Syscalls o.ä., und haben alle nötigen Privilegien um, theoretisch, falls implementiert, alle Eigenschaften der Anwendung auch korrekt wiederherzustellen. Allerdings muss der Kernel eben diese Funktionalitäten anbieten damit Kernelebene-C/R-Tools eingesetzt werden können und obwohl es wiederholt versuche der Integration von C/R-Tools in den Mainline Linux Kernel gab ist dies bisher nicht geschehen, das heißt es wird zur Nutzung ein gepatchter Kernel oder ein Kernel mit zusätzlichen Modulen benötigt.\\
-Das Checkpointing mit Kernelebene-C/R-Tools folgt zumeist einem Schema änhlich diesem:
+Dem gegenüber steht das Checkpointing auf Kernelebene, beispielsweise BLCR (Berkeley Lab's Linux Checkpoint/Restart) oder Linux-C/R. % BLCR?
+Diese C/R-Systeme nutzen den Kernel direkt, um alle nötigen Informationen während des Checkpointings zu sammeln. 
+Sie benötigen also keine Libraries für das Sammeln dieser Informationen durch das Abfangen von Syscalls und ähnlichem und haben alle nötigen Privilegien, um alle Eigenschaften der Anwendung korrekt und vollständig wiederherzustellen. 
+Allerdings muss der Kernel eben diese Funktionalitäten anbieten, damit Kernelebene-C/R-Tools eingesetzt werden können. Obwohl es wiederholt Versuche der Integration von C/R-Tools in den Linux Kernel gab, ist dies bisher nicht geschehen, das heißt es wird zur Nutzung ein gepatchter Kernel oder ein Kernel mit zusätzlichen Modulen benötigt.\\
+Das Checkpointing mit Kernelebene-C/R-Tools folgt zumeist einem Schema ähnlich diesem:
 \begin{enumerate}
     \item Einfrieren und Synchronisieren der Prozesse und Threads
-    \item Erfassen von globalen Informationen (d.h. Informationen die nicht direkt Teil der zu checkpointenden Anwendung sind wie Namespaces oder Container)
-    \item Erfassen der Prozess- bzw. Thread-Hierachien und -Informationen wie Parent/Child-Verhältnisse, PIDs, \dots
-    \item Erfassen des Statuses der einzelnen Prozesse und Threads, bspw. Signals, geöffnete Files und FDs, \dots
-    \item Beenden oder Weiterausführung der Anwendung, Schreiben all der erfassten Informationen
+    \item Erfassen von globalen Informationen (das heißt Informationen, die nicht direkt Teil der zu checkpointenden Anwendung sind), zum Beispiel Namespaces und Container
+    \item Erfassen der Prozess- beziehungsweise Thread-Hierarchien und -Informationen wie zum Beispiel Parent/Child-Verhältnisse und PIDs
+    \item Erfassen des Status der einzelnen Prozesse und Threads, beispielsweise Signals, geöffnete Files und FDs
+    \item Beenden oder Weiterausführung der Anwendung, Schreiben der erfassten Informationen in ein Image
 \end{enumerate}
-Dabei werden all diese Schritte natürlich nicht von der zu checkpointenden Anwendung selbst vorgenommen sondern von einem dafür gespawnten externen Prozess. Das Wiederherstellen funktioniert generell in änhlicher Weise:
+Dabei werden all diese Schritte natürlich nicht von der zu checkpointenden Anwendung selbst vorgenommen, sondern von einem dafür gespawnten externen Prozess. Das Wiederherstellen funktioniert generell in ähnlicher Weise:
 \begin{enumerate}
-    \item Wiederherstellen der globalen Information, beispielsweise Container bei Multiprocess-Anwendungen oder dem Prozess bei Multithreaded aber Singleprocess Anwedungen, wenn nötig
-    \item Erstellen einer Prozess- bzw. Threadhierachie entsprechend der erfassten Hierachie (in eingefrorenem Zustand)
-    \item Wiederherstellung des Statuses der einzelnen Prozesse und Threads
-    \item "Fortsetzen" beziehungsweise Auftauen der Prozesse/Anwendung
+    \item Wiederherstellen der globalen Information, beispielsweise Container bei Multiprocess-Anwendungen oder des Prozesses bei Multithreaded- aber Singleprocess-Anwedungen, falls nötig
+    \item Erstellen einer Prozess- beziehungsweise Threadhierarchie entsprechend der erfassten Hierarchie in einem eingefrorenem Zustand
+    \item Wiederherstellen des State der einzelnen Prozesse und Threads
+    \item Fortsetzen beziehungsweise Auftauen der Prozesse/Anwendung
 \end{enumerate}
-CRIU (Checkpoint/Restore in Userspace) ist ein Hybrid aus Userspace- und Kernelebene-Systemen, das heißt es agiert größtenteils in Userspace, nutzt jedoch Calls auf privilegierte Operationen wie das Forken mit bestimmten PIDs. All diese von CRIU benötigten Kernel-Capabilities sind seit einiger Zeit im Linux Mainline-Kernel vorhanden.
-Das Checkpointing und Restoring in CRIU ähnelt stark dem der Kernelebene-C/R-Systeme, benötigt insbesodere keine Intercept-Libraries wie normale Userspace-C/R-Tools, jedoch können nicht all diese Informationen von externen Programmen erfasst oder hergestellt werden. Dies umgeht CRIU indem es mittels ptrace sogennanten parasite code in die zu checkpointenen Prozesse einfügt (beziehungsweise den restorer blob bei der Wiederherstellung) die eben diese Informationen erfassen.\\ \\
-Das Checkpointen von Virtuellen Maschinen oder Containern nutzt zumeist einen der obigen Ansätze um die laufenden Virtuelle Maschine (als Anwendung auf dem Host-System) als ganzes zu Checkpointen. So nutzt Docker beispielsweise CRIU, verwaltet durch entsprechenden Aufrufe des docker Kontrollprogramms \texttt{docker checkpoint create [...]} und \texttt{docker start --checkpoint [...]}.
+CRIU (Checkpoint/Restore in Userspace) ist ein Hybrid aus Userspace- und Kernelebene-Systemen, das heißt, es agiert größtenteils im Userspace, nutzt jedoch Calls auf privilegierte Operationen wie das Forken mit bestimmten PIDs. 
+All diese von CRIU benötigten Kernel-Capabilities sind seit einiger Zeit im Linux Mainline-Kernel vorhanden.
+Das Checkpointing und Restoring in CRIU ähnelt stark dem der Kernelebene-C/R-Systeme, es benötigt insbesondere keine Intercept-Libraries wie einige Userspace-C/R-Tools. 
+Jedoch können nicht alle benötigten Informationen durch externe Programme erfasst und wieder hergestellt werden. 
+Dies umgeht CRIU indem es mittels ptrace sogenannten Parasite Code in die zu checkpointenden Prozesse einfügt (beziehungsweise den Restorer Blob bei der Wiederherstellung), der eben diese Informationen erfassen kann.\\ \\
+Das Checkpointen von Virtuellen Maschinen oder Containern nutzt zumeist einen der obigen Ansätze um die laufende Virtuelle Maschine (als Anwendung auf dem Host-System) als Ganzes zu checkpointen. 
+So nutzt Docker beispielsweise CRIU, verwaltet durch entsprechende Aufrufe des docker Kontrollprogramms \texttt{docker checkpoint create [...]} und \texttt{docker start --checkpoint [...]}.
 
 \subsubsection{Nach Capabilities}
-Zusätzlich unterscheiden sich verschiedene C/R-Tools auch noch danach was genau sie Checkpointen und Restoren können. Einige Tools wie frühere BLCR-Versionen unterstützen nur einzelne multi- oder singlethread Prozesse, Linux-CR unterstützt das Checkpointen beliebiger Container oder Subtrees von Prozessen. Tools die innerhalb von multithreaded Prozessen arbeiten, beispielsweise einzelne Threads checkpointen und wiederherstellen können existieren anscheinend nicht, zumindest fanden wir keine. Dies ist auch plausibel, da solche Threads sich eben Ressourcen teilen und daher ein teilweises Wiederherstellen nur einiger Threads zu undefiniertem Verhalten führen würde.\\
-Weitere Unterschiede gibt es in der Frage welche Eigenschaften von laufenden Programmen wiederhergestellt werden können, beispielsweise Netzwerkverbindungen wie TCP- oder UDP-Sockets, Dateien oder Namespaces, sowie bezüglich der Frage ob beliebige Programme gecheckpointed werden können oder ob bereits beim Start der Anwendung bekannt sein muss, dass diese gecheckpointed werden soll und entsprechende Vorbereitungen wie das Preloading von Libraries oder das Informieren des Kernels getroffen werden müssen.
+Zusätzlich unterscheiden sich C/R-Tools auch danach, welche Capabilities sie Checkpointen und Restoren können. 
+Einige Tools wie frühere BLCR-Versionen unterstützen nur einzelne multi- oder singlethreaded Prozesse, Linux-CR unterstützt dagegen das Checkpointen beliebiger Container oder Subtrees von Prozessen.
+Tools, die innerhalb von multithreaded Prozessen arbeiten, also einzelne Threads checkpointen und wiederherstellen können, sind uns nicht bekannt. 
+Dies ist auch plausibel, da Threads sich eben Prozess-Ressourcen teilen und daher ein Wiederherstellen nur einiger Threads eines Prozesses zu undefiniertem Verhalten führen würde.\\
+Weitere Unterschiede gibt es in der Frage, welche Eigenschaften von laufenden Programmen wiederhergestellt werden können. Dies sind beispielsweise Netzwerkverbindungen wie TCP- oder UDP-Sockets, Dateien und FDs oder Namespaces. C/R-Programme unterscheiden sich auch bezüglich der Frage, ob beliebige Programme gecheckpointed werden können und ob bereits zum Start der Anwendung bekannt sein muss, dass diese gecheckpointed werden soll. Im letztren Fall müssen unter Umständen entsprechende Vorbereitungen wie das Preloading von Libraries oder das Informieren des Kernels ob des bevorstehenden Checkpointings getroffen werden.
 
-\section{Fuzzing mit C/R}
-Wie oben erwähnt gibt es im klassischen Fuzzing einige Probleme: Komplexe Systeme oder große Overhead im Set-Up des Fuzztargets führen zur Reduktion des Durchsatzes und damit Einschränkung der Effizienz, mehrstufige interaktive Programme wie beispielsweise Netzwerkprotokolle sind als ganzes nur mit großem Aufwand oder sogar gar nicht vernünftig zu fuzzen. In dieser Arbeit wollen wir untersuchen, ob sich einige oder sogar alle dieser Probleme durch die Nutzung von Checkpoint/Restore-Mechanismen beheben oder zumindest in ihren Auswirkungen reduzieren lassen. Dazu betrachten wir zunächst einmal generell mögliche Ansätze und ihre theoretischen Vor- und Nachteile bevor wir ihre Implementierbarkeit mit kontemporären Fuzzern und Checkpoint/Restore-Systemen betrachten.\\
-Generell sehen wir zwei Ansätze zur Integration von Checkpoint/Restore-Tools in Fuzzern:
+\section{C/R-Fuzzing: Ansätze}
+Wie bereits erwähnt bestehen im klassischen Fuzzing einige Probleme: Komplexe Systeme oder großer Overhead im Set-Up des Fuzz-Targets führen zur Reduktion des Durchsatzes und damit zu Einschränkungen der Effizienz, mehrstufige interaktive Programme wie beispielsweise Netzwerkprotokolle sind als ganzes nur mit großem Aufwand oder gar nicht vernünftig zu fuzzen. 
+In dieser Arbeit wollen wir untersuchen, ob sich einige oder sogar alle diese Probleme durch die Nutzung von Checkpoint/Restore-Mechanismen beheben oder zumindest in ihren Auswirkungen reduzieren lassen. 
+Dazu betrachten wir zunächst generell mögliche Ansätze und ihre theoretischen Vor- und Nachteile, bevor wir die Implementierbarkeit mit verfügbaren Fuzzern und Checkpoint/Restore-Systemen betrachten.\\
+Generell sehen wir zwei Ansätze zur Integration von Checkpoint/Restore-Tools und Fuzzern:
 \begin{enumerate}
-    \item Integration des C/R-Tools in den Fuzzer selbst, das heißt der Fuzzer selbst übernimmt das Checkpointing und Restoring
-    \item Implementierung des Checkpointing und Restoring im Fuzztarget, transparent zum Fuzzer
+    \item Integration des C/R-Tools in den Fuzzer selbst, das heißt der Fuzzer selbst verwaltet das Checkpointing und Restoring
+    \item Implementierung des Checkpointing und Restoring innerhalb des Fuzztargets, transparent zum Fuzzer
 \end{enumerate}
-Die erste Alternative, ein C/R-Fuzzer, wäre aber natürlich eine sauberere Lösung als die ad hoc Lösung der Implementierung im Fuzztarget und bietet die selben oder sogar mehr Möglichkeiten wie die Fuzztarget-Lösung, benötigt aber natürlich eben einen C/R-Fuzzer, etwas das unseren Nachforschung nach bisher nicht einmal in Ansätzen existiert.\\
+Die erste Alternative, ein C/R-Fuzzer, wäre eine umfassendere Lösung als die Ad-hoc-Lösung der Implementierung im Fuzztarget und bietet eine größere Palette an Möglichkeiten als die Fuzztarget-Lösung, benötigt allerdings eben einen C/R-Fuzzer: Etwas, das nach unseren Recherchen weder in Software existiert noch in Konzepten diskutiert wurde.\\
 %Aim of this thesis: Answer the question wether we could solve some or all of aboves issues in using fuzzing for security testing by using C/R. In this chapter we will look at a few approaches and their requirements, general feasibility and what issues they would solve.
 %There are two generally possible approaches: 1. Using C/R in a Fuzzer that is not just aware that C/R is happening but does the C/R parts for you and makes active use of C/R for performance 2. Using a "normal" fuzzer and do all the C/R stuff in the fuzztarget
 \subsection{C/R-Fuzzer}
-Klassische moderne Fuzzer wie libfuzzer oder afl folgen während des Fuzzings im Allgemeinen diesem Aufbau:
-\begin{lstlisting}[caption=Struktur Klassischer Non-C/R-Fuzzer]
+Klassische moderne Fuzzer wie beispielsweise libfuzzer folgen während des Fuzzings im Allgemeinen diesem Ablauf:
+\begin{lstlisting}[caption=Struktur klassischer Non-C/R-Fuzzer]
 Bis ein Problem auftritt:
     Generiere einen neuen Input (aus dem Seed, Corpus, Dictionary Regeln)
     Führe das Fuzz-Target mit diesem Input aus
     Analysiere das Fuzz-Target während der Ausführung und update den Corpus wenn nötig
 \end{lstlisting}
-Das heißt das Fuzz-Target wird so oft mit verschiedenen Inputs ausgeführt bis ein Problem auftritt. Dabei hat das Fuzz-Target in Normalfall eine Form wie diese (oder kann in diese Form gebracht werden):
-\begin{lstlisting}[caption=Struktur Klassisches Fuzztarget]
-[Inputunabhängiges Set-Up]
-[Inputabhängiges Set-Up]
-[Zu testender Code oder Funktion]
+Das Fuzz-Target wird also mit verschiedenen Inputs ausgeführt, bis ein Problem auftritt. Dabei kann das Fuzz-Target im Normalfall strukturell wie in Listing 2 beschrieben in drei Blöcke zerlegt werden.
+\begin{lstlisting}[caption=Struktur klassischen Fuzztargets]
+Inputunabhängiges Set-Up
+Inputabhängiges Set-Up
+Zu testender Code oder Funktion
 \end{lstlisting}
-Hierbei ist das Ergebnis von 1. im Allgemeinen entweder konstant oder zumindest austauschbar wenn es beispielsweise externe (pseudo-)zufällige Einflüsse wie Nutzung der Systemzeit oder Aufrufe von Zufallszahlgeneratoren gibt. Dies heißt aber nun, dass wir das Fuzz-Target aufteilen können wie folgt:
-\begin{enumerate}
-    \item Inputunabhängiges Set-Up
-    \item Inputabhängiges Set-Up und zu testende Funktionalität
+Hierbei ist das Ergebnis von Zeile 1 im Allgemeinen entweder konstant oder zumindest austauschbar (wenn es beispielsweise externe (pseudo-)zufällige Einflüsse wie Nutzung der Systemzeit oder Aufrufe von Zufallszahlgeneratoren gibt). Für die Betrachtung in dieser Arbeit könen wir das Fuzz-Target nun wie folgt aufteilen:
+\begin{enumerate}[(a)]
+    \item Inputunabhängiges Set-Up (Zeile 1 in Listing 2)
+    \item Inputabhängiges Set-Up und zu testende Funktionalität (Zeilen 2 und 3 in Listing 2)
 \end{enumerate}
-Wenn wir dies machen können wir nun als Alternative zum klassischen Fuzzer einen C/R-Fuzzer nutzen, der folgendem Aufbau folgt:
+Hierauf aufbauend würde ein C/R-Fuzzer als Alternative zum klassischen Fuzzer dem Aufbau in Listing 3 folgen.
 \begin{lstlisting}[caption=Struktur einfacher C/R-Fuzzer]
 Führe den Inputunabhängigen Teil des Fuzz-Targets aus und checkpointe ihn
 Bis ein Problem auftritt:
     Generiere einen neuen Input (aus dem Seed, Corpus, Dictionary Regeln)
     Restore das Fuzz-Target, übergebe diesen Input und führe den Inputabhängigen Teil des Fuzz-Targets aus
-    Analysiere den Input-Abhängigen Teil des Fuzz-Targets während der Ausführung und update den Corpus wenn nötig
+    Analysiere den Inputabhängigen Teil des Fuzz-Targets während der Ausführung und update den Corpus wenn nötig
 \end{lstlisting}
-Hierbei müssen natürlich ein paar Dinge beachtet werden: Die Übergabe des Inputs muss während der Laufzeit beispielsweise über stdin erfolgen, eine Übergabe des Inputs durch Parameter zum Zeitpunkt des Aufrufes wie beispielsweise bei libfuzzer ist nicht ohne weiteres möglich. Das Aufteilen des Fuzz-Targets heißt nicht das Aufteilen in mehrere unabhängige Code-Segmente - damit Checkpoint/Restore ohne Modifikationen funktionieren kann muss der inputabhängige Teil bereits von Anfang an im Fuzz-Target vorhanden sein. Ein solches Fuzz-Target könnte dann wie folgt aussehen:
+Hierbei ist folgendes zu beachten: 
+Die Übergabe des Inputs muss während der Laufzeit (beispielsweise über \texttt{stdin}) erfolgen, eine Übergabe des Inputs durch Parameter zum Zeitpunkt des Aufrufes wie beispielsweise bei libfuzzer ist nicht ohne weiteres möglich. 
+Das Aufteilen des Fuzz-Targets bedeutet nicht das Aufteilen in mehrere unabhängige Code-Segmente - damit Checkpoint/Restore ohne Modifikationen funktionieren kann, muss der inputabhängige Teil bereits von Anfang an im Fuzz-Target vorhanden sein. 
+Ein solches Fuzz-Target hätte damit eine Struktur wie in Listing 4 beschrieben.
+% TODO: Fuzztarget vs Fuzz-Target
 \begin{lstlisting}[caption=Struktur C/R-Fuzzer-Fuzztarget]
-[Inputunabhängiges Setup]
+Inputunabhängiges Setup
 Breakpoint
-[Inputabhängiges Setup]
-[Zu testender Code oder Funktion]
+Inputabhängiges Setup
+Zu testender Code oder Funktion
 \end{lstlisting}
-Hierbei hält der Breakpoint die Ausführung des Fuzztargets an und informiert den Fuzzer darüber, dass er an dieser Stelle das Fuzz-Target checkpointen sollte.\\
-Ein solcher C/R-Fuzzer kann unter Umständen das Problem großen Overheads im Setup lösen oder zumindest reduzieren. 
-Mit $T_{Setup}$ die Laufzeit des inputunabhängigen Setups, $T_{Execution}$ die (mittlere) Laufzeit des inputabhängigen Setups und des zu testenden Codes, $T_{Checkpoint}$ und $T_{Restore}$ die benötigte Zeit für eine Checkpointing- beziehungsweise Restoreoperation. 
-Dann ergibt sich für die Laufzeit eines normalen, nicht-C/R Fuzzers bei $n$ benötigten Operationen 
+Hierbei hält der Breakpoint die Ausführung des Fuzztargets an und informiert den Fuzzer darüber, dass er an dieser Stelle das Fuzz-Target checkpointen soll.\\
+Ziel eines solchen simplen C/R-Fuzzers ist es, den Overhead durch wiederholte Ausführung des Setups zu reduzieren.
+Im Folgenden bezeichnen wir mit $T_{Setup}$ die Laufzeit des inputunabhängigen Setups, mit $T_{Execution}$ die (mittlere) Laufzeit des inputabhängigen Setups und des zu testenden Codes, sowie mit $T_{Checkpoint}$ und $T_{Restore}$ die benötigte Zeit für eine Checkpointing- beziehungsweise Restoreoperation. 
+Für die die Laufzeit eines normalen, nicht-C/R Fuzzers bei $n$ benötigten Operationen ergibt sich
 \begin{equation}
     T_{Non-C/R}(n) = n (T_{Setup} + T_{Execution})
 \end{equation}
@@ -186,51 +236,64 @@ und für einen C/R-Fuzzer wie oben beschrieben
 \begin{equation}
     T_{C/R}(n) = T_{Setup} + T_{Checkpoint} + n (T_{Restore} + T_{Execute})
 \end{equation}
-Für große $n$ und $T_{Restore} < T_{Setup}$ ergibt sich hier nun also eine Zeitersparniss pro Iteration:
+Für große $n$ und $T_{Restore} < T_{Setup}$ ergibt sich hier nun also eine Zeitersparnis pro Iteration:
 \begin{equation}
     \begin{split}
         \frac{T_{Non-C/R}(n) - T_{C/R}(n)}{n} &= \frac{(n-1) T_{Setup} - T_{Checkpoint} - n T_{Restore}}{n} \\
         &=_{n \to \infty} T_{Setup} - T_{Restore}
     \end{split}
 \end{equation}
-$T_{Setup}$ ist dabei natürlich vom jeweilig zu testenden Programm abhängig, $T_{Restore}$ von mehreren Faktoren, unter anderem dem Programm selbst, insbesondere die Größe im Speicher und die zu checkpoitenen Features wie Netzwerksockets, und natürlich das genutzte Checkpoint/Restore-Tool, eine genauere Betrachtung davon findet in Kapitel CRIU.Performance statt.
-\subsection{Non-C/R-Fuzzer mit C/R Ansätze}
-Ein anderer Ansatz zur Kombination von Fuzzing mit Checkpoint/Restore-Mechanismen wäre, statt des impliziten Checkpointing durch den Fuzzer, eplizites Checkpointing und Restoring im Fuzztarget. 
-Dies hätte den Vorteil einer größeren Flexivilität im Einsatz und würde im Idealfall keinerlei Änderungen am Fuzzer benötigen, könnte also unter Umständen bereits mit vorhandenen Fuzzern genutzt werden - darauf welche Umstände dies sind und wie es sich ob der Anwendbarkeit bei modernen Fuzzern verhält gehen wir in Kapitel CRIU+Fuzzing Engines ein.
-Wir betrachten hier zwei Varianten dieses Ansatzes: Zuerst eine recht naive Nutzung von Checkpoint/Restore im Fuzztarget eines Non-C/R-Fuzzers mit ähnlichem Ziel und einem ähnlichen Ansatz zu dem oben beschriebenen C/R-Fuzzer, danach eine Architektur die durch Anwendung von Checkpoint/Restore versucht das effiziente Fuzzen komplexer mehrstufiger Programme, beispielsweise Netzwerkprotokolle, durch Exploration des Zustandsgraphen als ganzes zu ermöglichen.\\
+$T_{Setup}$ ist dabei natürlich vom jeweilig zu testenden Programm abhängig, $T_{Restore}$ von mehreren Faktoren, unter anderem dem Programm selbst, insbesondere der Größe im Speicher und den zu checkpointenden Features wie Netzwerksockets, und natürlich dem genutzten Checkpoint/Restore-Tool. Eine genauere Betrachtung der Einflüsse dieser Faktoren findet in Kapitel 5.5 statt.
+
+\subsection{Non-C/R-Fuzzer mit C/R-Ansätzen}
+Ein anderer Ansatz zur Kombination von Fuzzing mit Checkpoint/Restore-Mechanismen ist es, statt des impliziten Checkpointing durch den Fuzzer eplizites Checkpointing und Restoring im Fuzztarget vorzunehmen.
+Dies hat den Vorteil einer größeren Flexibilität im Einsatz und benötigt im Idealfall keine Änderungen am Fuzzer. Dieser Ansatz könnte also unter Umständen mit bereits verfügbaren Fuzzern genutzt werden.\footnote{Eine Diskussion dieser Umstände und der tatsächlichen Anwendbarkeit findet in Kapitel 6 statt.}\\
+Wir betrachten hier zwei Varianten dieses Ansatzes: zuerst in Kapitel 4.2.1 eine generische, naive Nutzung von Checkpoint/Restore im Fuzztarget eines Non-C/R-Fuzzers mit ähnlichem Ziel und einem ähnlichen Ansatz zu dem oben beschriebenen C/R-Fuzzer.\\
+Kapitel 4.2.2 behandelt eine problemspezifische Architektur, die durch Anwendung von Checkpoint/Restore-Methoden versucht, das effiziente Fuzzen von Netzwerkprotokollen als Beispiel für komplexe mehrstufige Programme durch Exploration des Zustandsgraphen zu ermöglichen.
 %Can we make something work with normal Fuzzers? What could it look like? What could we use it for?
-\subsubsection{Naiv}
-Eine konzeptuell recht simple Variante der Kombination von klassischen, Non-C/R-Fuzzern mit C/R-Implementierung im Fuzztarget wäre naives Restoring nach dem inputunabhängigen Setup, änhlich wie bei dem oben beschriebenen C/R-Fuzzer. 
-Anders als beim obigen C/R-Fuzzer muss hier jedoch im Fuzztarget entschieden beziehungsweise bestimmt werden, ob wir uns in der ersten Iteration befinden, das Setup also ausgeführt werden und danach gecheckpointed werden muss, oder ob wir uns in einer späteren Iteration befinden, wir also das Setup überspringen und direkt, mittels Restoring, zur Ausführung des zu testenden Codes springen. 
-Dies kann beispielsweise durch das Setzen von Systemvariablen oder das Erstellen von Tokens im Dateisystem geschehen - ist die Variable bei einer Ausführung also gesetzt oder existiert die Datei so befinden wir uns in einer späteren Ausführung und sollten das Setup durch einen Restore überspringen.\\
-Konkret sollte ein solches Fuzztarget dann hierfür in etwa so aussehen:
+\subsubsection{Naiver Non-C/R-Fuzzer}
+Eine konzeptuell recht einfacher Ansatz ist das Checkpointing nach der Ausführung des unabhängigen Setups, ähnlich wie bei dem oben beschriebenen C/R-Fuzzer.
+Dies ermöglich in späteren Ausführungen des Fuzz-Targets ein Aufsetzen an dieser Stelle.
+Anders als bei einem C/R-Fuzzer nach Kapitel 4.1 (bei dem diese Information durch den Fuzzer verwaltet wird) muss hier jedoch im Fuzz-Target bestimmt werden, ob es sich in der ersten Iteration oder einer späteren Iteration befindet. 
+In der ersten Iteration muss das Setup einmalig ausgeführt und danach gecheckpointed werden; in späteren Iterationen wird das Setup nicht erneut ausgeführt, sondern der Checkpoint wiederhergestellt und die Ausführung, beginnend direkt mit dem zu testenden Code, fortgesetzt.
+Dies kann beispielsweise durch das Setzen von Systemvariablen oder das Erstellen eines Tokens im Dateisystem geschehen - ist die Variable bei einer Ausführung also gesetzt oder existiert der Token, so befindet sich das Fuzz-Target in einer späteren Iteration und überspringt das Setup durch ein Restore.
+Ein solches Fuzz-Target folgt der Struktur aus Listing 5.\footnote{In Kapitel 6 stellen wir prototypische Umsetzungen mit CRIU und afl/libFuzzer dar.}
 \begin{lstlisting}[caption=Struktur C/R-Fuzztarget für Non-C/R-Fuzzer]
 Falls der Token existiert:
     Restore
 Sonst:
     Führe Setup aus
     Setze Token
-    Checkpointe das Programm (ohne Dump)
+    Checkpointe das Programm und setze die Ausführung fort
     Hole dir den Input
     Führe den Test mit diesem Input aus
 \end{lstlisting}
-Wenn in Zeile 2 restoret wird so wird die alte, gecheckpointete Instanz wieder hergestellt und setzt ihre Ausführung in Zeile 7 fort, holt sich also neuen Input und testet mit diesem.\\
-Hierbei können jedoch einige Probleme auftreten die zu beachten sind:
+Wenn in Zeile 2 restoret wird, so wird die alte, gecheckpointete Instanz wiederhergestellt und setzt ihre Ausführung in Zeile 7 fort, holt sich also neuen Input und testet mit diesem.\\
+Hierbei sind folgende Punkte zu beachten:
 \begin{itemize}
-    \item Wie beim C/R-Fuzzer muss natürlich das Setup inputunabhängig sein beziehungsweise in einen inputunabhängigen Teil, welcher vor dem Checkpoint ausgeführt wird, und einen inputabhängigen Teil, welcher mit dem Test selbst ausgeführt wird, aufgebrochen werden.
-    \item Der Fuzzer muss mit Multiprocess-Programmen umgehen können und über das Vorhandensein des restorten Prozesses informiert sein, inbesondere muss er Exceptions, undefiniertes Verhalten und anderes unerwünschtes Verhalten im restorten Prozess erkennen können. Dies könnte beispielsweise durch eine restore-as-child Funktionalität wie beispielsweise von CRIU angeboten realisiert werden, benötigte jedoch trotzdem noch einen robusten Multiprocessfähigen Fuzzer
-    \item Der restorte Prozess muss in irgendeiner Form an den Input kommen - dies könnte mit kontemporären Fuzzern unter Umständen ein Problem darstellen, da diese zumeist den Input entweder beim Aufruf des Fuzztargets als Argument oder durch einen FD wie \texttt{stdin} übergeben werden - beides Ressourcen auf die der wiederhergestellte Prozess im Allgemeinen keinen Zugriff hat. Dieses Problem könnte gelöste werden indem der restorte Prozess den Input direkt von Fuzzer erhält, beispielsweise indem der Fuzzer die Inputs über einen FIFO oder eine ähnliche Ressource im Filesystem, außerhalb des Prozesses selbst, übergibt oder indem der restorende Prozess vor dem Restore den Input in einer Art und Weise abspeichert, so dass der restorte Prozess diesen Input auslesen kann, beispielsweise wieder durch eine Zwischenspeicherung im Filesystem (siehe Listing WASAUCHIMMER).
-    \item Die Messung der Codecoverage bei White- oder Gray-Box-Fuzzern dürfte wenig zuverlässig sein wenn im Fuzztarget selbst restoret wird - einerseits durch die Einführung von neuen Codeelementen durch das C/R-Tool, wobei dies natürlich vom C/R-Ansatz und dem genutzten C/R-Tool abhängt, saubere Kernelebene-C/R-Tools dürften hier beispielsweise wenig Einfluss haben, andererseits durch die massive und durch den eigentlich Programmcode nicht beschriebene Veränderung des Prozesses durch das Restore. Dies dürfte dazu führen, dass ein solcher Non-C/R-Fuzzer wenig besser als ein Black-Box-Fuzzer funktionieren dürfte.
+    \item Wie auch beim C/R-Fuzzer ist das Setup in einen inputunabhängigen und einen inputabhängigen Teil aufzubrechen. Dabei wird nur der inputunabhängige Teil vor dem Checkpoint ausgeführt, der inputabhängige Teil wird zusammen mit dem zu testenden Code in jeder Iteration in Zeile 7 ausgeführt.
+    \item Da mit dem Restore in Zeile 2 ein neuer Prozess entsteht, muss der genutzte Fuzzer Multiprocess-Anwendungen behandeln können und über die Erstellung des (eigentlich zu testenden) restoreten Prozesses informiert werden. 
+        Inbesondere muss unerwartetes beziehungsweise unerwünschtes Verhalten im restoreten Prozess erkannt werden können. 
+        Dies kann beispielsweise durch eine restore-as-child Funktionalität vom C/R-Tool realisiert werden\footnote{Zum Beispiel von CRIU unterstützt.}, benötigt allerdings einen Fuzzer mit Multiprocess-Fähigkeiten.
+    \item Eine speziell zu betrachtende Multiprocess-Fähigkeit der Fuzzing-Engine ist die Messung der Code-Coverage bei White- und Grey-Box-Fuzzern. Aus Sicht der Fuzzing-Engine wird der restorenden Prozess als Fuzz-Target wahrgenommen, nicht der eigentlich zu testende Prozess. Hier wäre also speziell eine Umlenkung auf den gespawnten Prozess ein notwendiges Feature einer Fuzzing-Engine für die korrekte Messung der Code-Coverage.
+    \item Fuzzing setzt im Allgemeinen parallele Ausführungen des selben Fuzz-Targets zur Effizienzsteigerung ein. 
+        Dies ist im beschriebenen Ansatz nicht ohne weiteres möglich, da mehrere, gleichzeitige Restores der selben Instanz zu konkurriendem Zugriff auf Ressourcen wie PID, Input und Netzwerkressourcen führen würden. Dies würde typischerweise ein erfolgreiches und korrektes Restoring verhindern. 
+        Ohne Änderung der Fuzzing-Engine könnte eine Parallelisierung nur erfolgen, indem die Fuzzing-Engine mehrfach instanziert wird und das Fuzz-Target hierbei für jede Instanz andere Werte für Token, den Imagepfad, etc. kennt.
+    \item Der Mechanismus zur Übergabe des Inputs an das Fuzz-Target muss bestimmten Anforderungen entsprechen (dies kann je nach Fuzzer ein Problem darstellen, da diese zumeist den Input entweder beim Aufruf des Fuzztargets als Argument oder durch einen FD wie \texttt{stdin} übergeben - beides Ressourcen, auf die der wiederhergestellte, eigentlich zu testende Prozess keinen Zugriff hat). Hierfür existieren zwei Strategien:
+        \begin{itemize}
+            \item Der restorete Prozess holt sich den Input direkt von der Fuzzing-Engine, beispielsweise indem die Fuzzing-Engine die Inputs in einer FIFO bereitstellt. Jeder restorete Prozess, in jeder Iteration, entnimmt seinen Input und führt mit ihm den Test aus.
+            \item Der restorende Prozess speichert vor dem Restore den erhaltenen Input in einer Art und Weise ab, dass der restorete Prozess diesen Input auslesen kann, beispielsweise durch eine Zwischenspeicherung in einer Datei. Eine Adaption von Listing 5 an diese Strategie ist in Listing 6 dargestellt.
+        \end{itemize}
 \end{itemize}
-\begin{lstlisting}[caption=Struktur C/R-Fuzztarget für Non-C/R-Fuzzer mit Inputdump]
+\begin{lstlisting}[caption=Struktur C/R-Fuzztarget für Non-C/R-Fuzzer mit Zwischenspeicherung des Inputs]
+Hole den Input von Fuzzing-Engine
+Schreibe den Input in eine Datei
 Falls der Token existiert:
-    Hole den Input
-    Schreibe den Input in eine Datei
     Restore
 Sonst:
     Führe Setup aus
     Setze Token
-    Checkpointe das Programm (ohne Dump)
+    Checkpointe das Programm
     Hole den Input aus der Datei
     Führe den Test mit diesem Input aus
 \end{lstlisting}
@@ -247,8 +310,8 @@ $T_{C/R}$ ist etwas komplizierter, da das Fuzztarget hier einige der C/R-Fuzzer-
             &= T_{Setup} + T_{Checkpoint} + (n-1) T_{Restore} + n T_{Execute}
     \end{split}
 \end{equation}
-Die Vereinfachung in $(a)$ kommt dabei aus der Annahme, dass die diversen Token- und Inputoperationen verglichen mit den recht langsamen Restore- und Setup-Operationen für die letztendliche Laufzeit nicht ins Gewicht fallen beziehungsweise im Falle der Inputoperationen auch im Non-C/R-Fall ausgeführt werden müssen, dies dort jedoch versteckt geschieht.\\
-Das $T_{C/R}$ in diesem Fall unterscheidet sich nicht relevant vom $T_{C/R}$ in Gleichung (2), der Unterschied um $1 T_{Restore}$ ergibt sich daraus, dass wir im C/R-Fuzzer nach dem ersten Setup nicht direkt weiter ausführen sondern den Prozess beenden und dann später für die erste Ausführung wieder Restoren. Natürlich ließe sich im C/R-Fuzzer-Fall auch diese Optimierung vornehmen.\\
+Die Vereinfachung in $(a)$ setzt voraus, dass die diversen Token- und Inputoperationen verglichen mit den recht langsamen Restore- und Setup-Operationen für die letztendliche Laufzeit nicht ins Gewicht fallen.\\
+Das $T_{C/R}$ in diesem Fall unterscheidet sich nicht relevant vom $T_{C/R}$ des C/R-Fuzzers in Gleichung (2), der Unterschied um $1 T_{Restore}$ ergibt sich daraus, dass wir im C/R-Fuzzer nach dem ersten Setup nicht direkt weiter ausführen, sondern den Prozess beenden und dann später für die erste Ausführung wieder Restoren. Natürlich ließe sich im C/R-Fuzzer-Fall auch diese Optimierung vornehmen.\\
 Auch hier ergibt sich, analog zu Gleichung (3) die Laufzeitverbesserung je Iteration als
 \begin{equation}
     \begin{split}
@@ -257,51 +320,56 @@ Auch hier ergibt sich, analog zu Gleichung (3) die Laufzeitverbesserung je Itera
     \end{split}
 \end{equation}
 
-\subsubsection{Exploration des Zustandsgraphen in Client/Server Systemen}
-Die bisher beschriebenen Ansätze bieten nur sehr naive Ansätze zur Lösung nur eines der beschriebenen Fuzzingprobleme - Laufzeitoverheadreduktion in einstufigen, simplen Anwendungen. 
-In diesem Kapitel beschreiben wir einen Ansatz zum Testen einer Seite komplexerer, insbesondere mehrstufiger, interaktiver Client-Server-Anwendungen. 
-Hierbei wird durch die Fuzzing-Inputs Schritt für Schritt ein Zustandsgraph beispielsweise des Servers aufgebaut, parallel dazu werden bereits diese Zustände jeweils mit den Inputs auf Exceptions gestestet. 
+\subsubsection{Exploration des Zustandsgraphen in Client/Server-Systemen}
+Die bisher beschriebenen Ansätze bieten nur sehr naive Ansätze zur Lösung nur eines der beschriebenen Fuzzingprobleme - Reduktion des Laufzeitoverheads durch wiederholte Ausführung des Setups in einstufigen, simplen Anwendungen. 
+In diesem Kapitel beschreiben wir einen Ansatz zum Testen einer der Seiten in komplexen, insbesondere mehrstufigen, interaktiven Client-Server-Anwendungen. 
+Hierbei wird durch die Fuzzing-Inputs Schritt für Schritt ein Zustandsgraph beispielsweise des Servers aufgebaut, parallel dazu werden bereits diese Zustände jeweils mit den Inputs auf problematisches, unerwünschtes Verhalten getestet. 
 Zur besseren Lesbarkeit werden wir in diesem Kapitel davon ausgehen, dass ein Server gefuzzt werden soll und das Fuzztarget die Client-Aufgaben übernimmt, dies lässt sich natürlich auch umkehren.\\
-Das Fuzztarget hat dabei in diesem Ansatz mehrere Aufgaben:
+Das Fuzztarget übernimmt dabei in diesem Ansatz mehrere Aufgaben:
 \begin{itemize}
-    \item Client-Server-Interaktion: Das Fuzztarget implementiert nicht einen wirklichen Client der das erwünschte Protokoll spricht sondern simuliert nur einen solchen indem es die von der Fuzzing-Engine generierten Inputs als Client-Input an den Server übergibt, beispielsweise über eine etablierte TCP-Verbindung zwischen dem Server und Client.
-    \item Verwaltung des Servers: Das Fuzztarget hält in persistenter Form, beispielsweise durch Schreiben ins Dateisystem, den bisher gefundenen Zustandsgraphen des Servers, also die gefundenen Zustände und die Inputs die zu Übergängen führen, vor. Zusätzlich wird jeder Zustand wenn er das erste mal erreicht wird gecheckpointet und das entsprechende Image mit dem Zustand verknüpft, das heißt das Fuzztarget muss auch bestimmten wann neue Zustände erreicht werden.
+    \item Client-Server-Interaktion: Das Fuzztarget implementiert nicht einen wirklichen Client, der das erwünschte Protokoll spricht, sondern simuliert nur einen solchen Client, indem es die von der Fuzzing-Engine generierten Inputs als Client-Input an den Server übergibt, beispielsweise über eine bereits etablierte TCP-Verbindung zu dem Server.
+    \item Verwaltung des Servers: Das Fuzztarget hält in persistenter Form, beispielsweise durch Schreiben ins Dateisystem, den bisher gefundenen Zustandsgraphen des Servers vor, also die gefundenen Zustände und die Inputs, die zu Übergängen zwischen diesen führen. 
+        Zusätzlich wird jeder Zustand, wenn er das erste Mal erreicht wird, gecheckpointet und das entsprechende Image mit dem Zustand verknüpft, das heißt das Fuzz-Target muss auch erkennen wenn einer neuer Zustand erreicht wird.
 \end{itemize}
-Hierbei werden dann neu generierte Inputs aber nicht nur auf einen bestimmten Zustand angewendet sondern entweder hintereinander auf alle bisher bekannten Zustände oder auf zufällig gewählte Zustände, so dass der Zustandsgraph weiter ausgebaut wird.\\
-Ein solches Fuzztarget könnte in Pseudocode wie folgt aussehen:
+Neu generierte Inputs werden dabei hintereinander auf alle bekannten Zustände angewendet, der Zustandsgraph wird um neu gefundene Kanten und neue Zustände erweitert.\\
+Listing 7 implementiert ein solches Fuzz-Target in Pseudocode.
 \begin{lstlisting}[mathescape, caption=Fuzztarget zur Exploration des Zustandsgraphen]
 if token not set:
     server.start()
-    connection <- connectTo(server)
-    c <- checkpoint(connection)
-    state_id <- server.state
-    s <- cr.checkpoint(server, dump=true)
-    transition = [] // [(input, new_state)]
-    states <- {state_id = {s = s, c = c, t = transition, id = state_id}}
-for state in states:
-    server <- cr.restore(state[s])
-    connection <- restore(state[c])
+    connection := connectTo(server)
+    c := checkpoint(connection)
+    state_id := server.state
+    s := cr.checkpoint(server, dump=true)
+    transition := [] // Liste der Übergänge zu anderen Zuständen
+    states := {} // Dictionary der Zustände
+    states[state_id] = {s: s, c: c, t: transition, id: state_id}
+    set token
 
-    input <- fuzzer.input
+input := fuzzer.input
+
+for old_state in states:
+    server := cr.restore(old_state[s])
+    connection := restore(old_state[c])
+
     connection.send(input)
-    if state.id $\neq$ server.state and server.state not in states.keys:
-        new_c <- checkpoint(connection)
-        new_state_id <- server.state
-        new_s <- cr.checkpoint(server, dump=true)
-        new_t = []
-        states[state][t].append((input, new_state_id))
-        states[new_state_id] = {s = new_s, c = new_c, t = new_t, id = new_state_id}
-    else if state.id $\neq$ server.state:
-        states[state][t].append(input, server.state)
+    if server.state not in states.keys:
+        new_state_c := checkpoint(connection)
+        new_state_id := server.state
+        new_state_s := cr.checkpoint(server, dump=true)
+        new_state_t := []
+        states[old_state][t].append((input, new_state_id))
+        states[new_state_id] := {s: new_state_s, c: new_state_c, t: new_state_t, id: new_state_id}
+    else if old_state.id $\neq$ server.state:
+        states[old_state][t].append(input, server.state)
 \end{lstlisting}
-Hierbei kann es sich bei \texttt{connection} um eine beliebige Verbindungsart zwischen dem Client und dem Server handeln, beispielsweise eine TCP-Verbindung oder UNIX-Sockets, solange das wiederherstellen dieser Verbindung vom C/R-Tool unterstützt wird. Das clientseitige Checkpointing (beispielsweise Zeile 4) wird dabei nicht durch das normale C/R-Tool durchegeführt, da nicht der ganze Client gecheckpointed wird, sondern durch andere, der Art von \texttt{connection} angemessene Ansätze. Für eine TCP-Verbindung kann dies beispielsweise durch einen Userspace TCP/IP-Stack geschehen oder durch das Nutzen der \texttt{TCP\_REPAIR} Option in modernen Linux-Kerneln (seit 3.5).\\
-Zusätzlich muss sich der Server darüber bewusst sein, in welchem Zustand er sich gerade befindet und dies dem Fuzztarget/Client mitteilen können (siehe: \texttt{state\_id <- server.state} etc.), beispielsweise durch Einfügen entsprechender Funktionalität in den Servercode und die Übergabe durch einen entsprechenden IPC-Ansätze oder direkt durch das Auslesen des States aus den C/R-Dumps.\\
-Für einen Server mit bereits bekannten Zuständen $s_0, s_1, s_2, s_3$ mit den Zustandsübergängen wie gezeigt und entsprechenden Inputs für die Übergänge $i_1, \dots, i_4$ würde nun also für einen neuen Input $i*$ wie in Abbildung 1 gezeigt jeder der Zustände $s_0, \dots, s_3$ einmal wiederhergestellt, mit $i*$ getestet und falls Zustand $s_i$ mit Input $i*$ einen neuen Zustand erzeugt dieser gecheckpointed und als Knoten $s_4$ mit der Kante $(s_i, s_4, i*)$ dem Graphen hinzugefügt.
+Hierbei kann es sich bei \texttt{connection} um eine beliebige Verbindungsart zwischen dem Client und dem Server handeln, beispielsweise eine TCP-Verbindung oder UNIX-Sockets, solange das Wiederherstellen dieser Verbindung vom C/R-Tool unterstützt wird. Das clientseitige Checkpointing der Verbindung in Zeile 4 und das entsprechende Wiederherstellen wird dabei nicht durch das normale C/R-Tool durchgeführt, sondern durch das Speichern der Verbindungsinformationen. Für eine TCP-Verbindung kann dies beispielsweise durch einen Userspace TCP/IP-Stack geschehen oder durch das Nutzen der \texttt{TCP\_REPAIR} Option in modernen Linux-Kerneln (seit 3.5).\\
+Zusätzlich muss sich der Server darüber bewusst sein, in welchem Zustand er sich gerade befindet, und dies dem Fuzz-Target/Client mitteilen können (siehe: \texttt{state\_id := server.state} etc.), beispielsweise durch Einfügen entsprechender Funktionalität in den Servercode und die Übergabe durch einen entsprechenden IPC-Ansatz.\\
+Abbildung 1 zeigt die Zustandsübergangsexploration: Es liegt ein Server vor mit bereits bekannten Zuständen $s_0, s_1, s_2, s_3$ und den Zustandsübergängen für die Inputs $i_1, \dots, i_4$. Für einen neuen Input $i*$ wird nun jeder der Zustände $s_0, \dots, s_3$ einmal wiederhergestellt und mit $i*$ getestet. Falls Zustand $s_i$ mit Input $i*$ einen neuen Zustand erzeugt, wird dieser gecheckpointed und als Knoten $s_4$ mit der Kante $(s_i, s_4, i*)$ dem Graphen hinzugefügt.
 
 \begin{figure}
 \begin{tikzpicture}[->,>=stealth',shorten >=1pt,auto,node distance=2.8cm,
                     semithick]
-  \tikzstyle{every state}=[fill=red,draw=none,text=black]
+  \tikzstyle{every state}=[fill=lightgray,draw=none,text=black]
 
   \node[initial,state] (A)                    {$s_0$};
   \node[state]         (B) [below left of=A] {$s_1$};
@@ -315,27 +383,31 @@ Für einen Server mit bereits bekannten Zuständen $s_0, s_1, s_2, s_3$ mit den 
 
   \path (A) edge              node {$i_1$} (B)
             edge              node {$i_2, i_4$} (D)
-            edge [bend left]  node {$i*$}  (E)
+            edge [bend left, dotted]  node {$i*$}  (E)
         (B) edge              node {$i_3$} (C)
-            edge [bend right]  node {$i*$}  (F)
-        (C) edge [bend right] node {$i*$}  (H)
-        (D) edge [bend left] node {$i*$}  (G);
+            edge [bend right, dotted]  node {$i*$}  (F)
+        (C) edge [bend right, dotted] node {$i*$}  (H)
+        (D) edge [bend left, dotted] node {$i*$}  (G);
 \end{tikzpicture}
     \caption{Zustandsübergangsexploration mit Input $i*$}
 \end{figure}
 
-Durch diese schrittweise Erforschung des Zustandsgraphen kann der Fuzzer nun an den verschiedenen Zuständen ansetzen und solte so durch Formulierung nur eines Fuzztargets in der Lage sein die ganze Funktionalität dieses Servers zu testen - anstatt wie im klassischen Fuzzing einzelne Fuzztargets für jeden Pfad in diesem Zustandsgraphen zu schreiben oder sogar nur einzelne Funktionen in Isolation zu testen.\\
-Hierbei gilt natürlich zu beachten, dass auch dieser Ansatz einige Probleme mit sich bringen dürfte:
+Bei Fragestellungen, bei denen eine sinnvolle Definition des States möglich ist, ergibt dieser Ansatz zwei Vorteile gegenüber klassischem Fuzzing:
 \begin{itemize}
-    \item White-Box-Fuzzing beziehungsweise klassisches Gray-Box-Fuzzing durch Code-Coverage werden, wie schon bei den naiven Ansätzen, durch die permanente Variation des tatsächlich ausgeführten Codes erschwert beziehungsweise könnten in bisherigen Fuzzern tatsächlich gar nicht nutzbar sein, da der eigentlich ausgeführte Code, der Client, gar nicht der Code ist den wir Fuzzen wollen - dies wäre der Server. Stattdessen stellt diese Art des Fuzzings jedoch eine eigene Art des Gray-Box-Fuzzings dar, da das Fuzztargets nach und nach die Struktur des Servers, wenn auch auf einem höheren Level als klassische Code-Coverage, herausarbeitet und darüber versucht das Fuzzing zu optimieren.
-    \item Selbst wenn Code-Coverage-Messungen möglich sind so ist ihre Effektivität doch dadurch abgeschwächt, dass diese Inputs auf alle Zustände angewendet werden, nicht nur auf diejenigen Zustände bei denen sie ob der Code-Coverage ausgewählt wurden. 
-    \item Ebenso wie bei der naiven C/R-Implemetierung im Fuzztarget muss der Fuzzer auch hier mit Multiprocess-Anwendung umgehen können, insbesondere den Server - als vom Fuzztarget gestartetes, eigenständiges Programm - in die Suche von Exceptions einbeziehen.
-    \item Das Formulieren von Regeln, Dictionaries, \dots für den Inputs eines Smart-Fuzzers wird verkompliziert, da diese Regeln nun nichtnur für einen Pfad oder eine bestimmte Funktion gelten sollten sondern für das ganze zu testende Programm. 
-        Dies kann unter Umständen zu einer Vergrößerung des Suchraums oder sogar der nicht-Nutzbarkeit von Smart-Fuzzern führen was wiederum zu Performanceeinbußen führen kann
-    \item In Fällen in denen es nur wenige gültige Übergänge auf einen Zustand mit hoher Distanz vom Ausgangsknoten gibt könnte es passieren, dass die Inputs bereits untersucht wurden oder als wenig vielversprechend von der Fuzzing-Engine verworfen wurden. Um dies zu vermeiden sollte die Optimierung der Inputs, wenn überhaupt möglich, nicht zu zielgerichtet erfolgen.
+    \item Ein schnelleres Restore des Servers im Zustand $s_i$ gegenüber dem Setup und Versetzen des Servers in $s_i$ durch dafür benötigte Inputs.
+    \item Der Tester muss nicht für jeden Zustand $s_i$ ein Fuzz-Target definieren, sondern das generische Fuzz-Target erzeugt dies durch den Checkpoint des Servers im Zustand $s_i$.
+\end{itemize}
+Nachteile dieses Ansatzes sind:
+\begin{itemize}
+    \item White-Box-Fuzzing beziehungsweise klassisches Gray-Box-Fuzzing durch Code-Coverage werden, wie schon Ansätzen in Kapitel 4.1 und 4.2.1, durch die permanente Variation des tatsächlich ausgeführten Codes erschwert beziehungsweise könnten in bisherigen Fuzzern tatsächlich gar nicht nutzbar sein, da der eigentlich ausgeführte Code, der Client, gar nicht der Code ist, den wir Fuzzen wollen - dies wäre der Server. 
+        Stattdessen stellt diese Art des Fuzzings jedoch eine eigene Art des Gray-Box-Fuzzings dar, da das Fuzztargets nach und nach die Struktur des Servers, wenn auch auf einem höheren Level als klassische Code-Coverage, herausarbeitet und darüber versucht, das Fuzzing zu optimieren.
+    \item Selbst wenn Code-Coverage-Messungen möglich sind, so ist ihre Effektivität doch dadurch abgeschwächt, dass diese Inputs auf alle Zustände angewendet werden, nicht nur auf diejenigen Zustände, bei denen sie ob der Code-Coverage ausgewählt wurden. 
+    \item Ebenso wie bei der naiven C/R-Implemetierung im Fuzztarget muss der Fuzzer auch hier mit Multiprocess-Anwendung umgehen können, insbesondere den Server - als vom Fuzztarget gestartetes, eigenständiges Programm - in die Suche nach problematischem Verhalten einbeziehen.
+    \item Das Formulieren von Regeln, Dictionaries, \dots für die Inputs eines Smart-Fuzzers wird dadurch verkompliziert, dass diese Regeln nun nicht nur für einen Pfad oder eine bestimmte Funktion gelten sollen, sondern für das ganze zu testende Programm. 
+        Dies kann unter Umständen zu einer Vergrößerung des Suchraums oder sogar der nicht-Nutzbarkeit von Smart-Fuzzern führen, was wiederum Performanceverluste bedeutet.
+    \item In Fällen, in denen es nur wenige gültige Übergänge auf einen Zustand mit hoher Distanz vom Ausgangsknoten gibt, kann es passieren, dass die Inputs bereits untersucht wurden oder als wenig vielversprechend von der Fuzzing-Engine verworfen wurden. Um dies zu vermeiden, sollte die Optimierung der Inputs, wenn überhaupt möglich, nicht zu zielgerichtet erfolgen.
     
 \end{itemize}
-
 %Welche Probleme soll dies lösen? Das Testen komplexer interaktiver mehrstufiger Programme, beispielsweise von Client-Server-Systemen mit klar definierten Zustandsgraphen\\
 %Wie löst es das? Es findet verschiedene Zustände und wendet mittels C/R Inputs auf all diese Zustände an, schaut ob es Bugs oder neue Zustände findet.\\
 %Pseudocode des Fuzztargets\\
@@ -345,67 +417,78 @@ Hierbei gilt natürlich zu beachten, dass auch dieser Ansatz einige Probleme mit
 
 
 \section{CRIU}
-Für den Rest der Arbeit werden wir CRIU - Checkpoint/Restore in Userspace - näher betrachten und CRIUs Nutzbarkeit für Fuzzing, insbesondere in Kombination mit kontemporären Fuzzing-Engines, untersuchen. Die Wahl von CRIU als C/R-Tool für diese Untersuchung ist dabei auf mehrere Gründe zurückzuführen:
+Für den Rest der Arbeit werden wir CRIU - Checkpoint/Restore in Userspace - näher betrachten und CRIUs Nutzbarkeit für Fuzzing, insbesondere in Kombination mit verfügbaren Fuzzing-Engines, untersuchen. 
+CRIU ist ein Open Source C/R-Tool, welches ursprünglich als Ersatz für das OpenVZ in-kernel Checkpoint/Restore-System durch ein Team bei Virtuozzo ab 2011 entwickelt wurde\cite{criuhistory}. 
+Unsere Wahl von CRIU als C/R-Tool für diese Untersuchung erfolgte aus folgenden Gründen:
 \begin{itemize}
-    \item Verfügbarkeit \& Aktualität: CRIU ist ein vergleichsweise modernes, gut dokumentiertes Open Source C/R-Tool das geringe Anforderungen - es benötigt keine Kernelpatches oder -module außerhalb des Linux Mainline Kernels - an das System stellt und ist daher auf einer Vielzahl von Systemen verfügbar. Zusätzlich wird CRIU von den Entwicklern noch unterstützt und weiterentwickelt, im Gegensatz zu einigen anderen vielversprechenden C/R-Tools wie Linux-C/R.
-    \item Unveränderte Binary: Anders als einige andere Userspace-C/R-Tools nimmt CRIU keine Veränderungen an der Binary vor oder benötigt bestimmte Schritte bei der Kompilierung - CRIU benötigt nichteinmal besondere Schritte beim Anwendungsstart, erst zum Zeitpunkt des Checkpointens wird CRIU aktiv.
-    \item Capabilities: CRIU bietet eine breite Palette an Capabilities die mit CRIU wiederhergestellt werden können, insbesondere TCP- und andere Netzwerkverbindungen, mehr dazu in Kapitel CRIU.Capabilities.
+    \item Verfügbarkeit \& Aktualität: CRIU ist ein vergleichsweise modernes, gut dokumentiertes Open Source C/R-Tool, das geringe Anforderungen an das System stellt - es benötigt keine Kernelpatches oder -module außerhalb des Linux Mainline Kernels - und ist daher auf einer Vielzahl von Systemen verfügbar. Zusätzlich wird CRIU von den Entwicklern noch unterstützt und weiterentwickelt, im Gegensatz zu einigen anderen vielversprechenden C/R-Tools wie Linux-C/R.
+    \item Unveränderte Binary: Anders als einige andere Userspace-C/R-Tools nimmt CRIU keine Veränderungen an der Binary vor und benötigt keine speziellen Schritte bei der Kompilierung - auch werden keine besondere Schritte beim Anwendungsstart benötigt, erst zum Zeitpunkt des Checkpointens wird CRIU aktiv.
+    \item Capabilities: CRIU bietet eine breite Palette an Capabilities, die mit CRIU wiederhergestellt werden können, insbesondere TCP- und andere Netzwerkverbindungen, mehr dazu in Kapitel 5.3.
 \end{itemize}
 CRIU findet unter anderem Anwendung in einigen prominenten Container-Anwendungen wie Docker, LXC/LXD und OpenVZ, anstatt des Legacy OpenVZ C/R-Systems, zur Implementierung des Container-Checkpointings.\\
 
 %CRIU is probably the only C/R tools that could make sense right now, two reasons why: 1. It's actually still getting updates and is actually easily useable on modern systems unlike many of the other things 2. It's capabilities exceed any other modern C/R tool
 \subsection{Nutzung}
-%TODO
-Es gibt zwei Kategorien wie CRIU genutzt werden kann:\\
-TODO RPC details
+CRIU kann auf zwei Arten genutzten werden:
+%TODO RPC details
 \begin{itemize}
-    \item Die Nutzung über das Command Line Interface ohne Remote Procedure Call beziehungsweise ohne CRIU Service
-    \item Die Nutzung des RPCs entweder durch das CLI oder eine Programmiersprachen API, insbesondere die C-API
+    \item Über CRIU-spezifische RPC-Aufrufe (Remote Procedure Call). Dies erfolgt entweder durch das CLI oder eine Programmiersprachen-API, insbesondere die C-API.
+    \item Über das Command Line Interface ohne RPC beziehungsweise ohne CRIU Service.
 \end{itemize}
-Unabhängig davon welcher der beiden Optionen man nutzt folgt das Checkpointing und Restoring in etwa den gleichen Schritten:
+Unabhängig davon, welche der beiden Optionen man nutzt, folgt das Checkpointing und Restoring in etwa den gleichen Schritten:
 \begin{itemize}
-    \item Falls RPC genutzt werden soll muss der Service laufen (beispielsweise zu starten durch \texttt{criu service}), falls die C-API genutzt wird muss diese mittels \texttt{criu\_init\_opts()} initialisiert werden
-    \item Man bestimmt welchen laufenden Prozess man checkpoiten möchte, meist über die \texttt{PID} durch Nutzung der \texttt{--tree \$PID} Option beziehungsweise \texttt{criu\_set\_pid(pid)}, falls sich ein Prozess über die C-API selbst checkpointen möchte muss \texttt{criu\_set\_pid} nicht explizit aufgerufen werden. Zusätzlich muss angeben werden, ob der Prozess nach dem Checkpointing fortgesetzt werden oder beendet werden soll.
-    \item Man gibt einen Pfad oder einen FD für das Image-Directory an, entweder über die \texttt{--images-dir \$IMGDIR} Option oder \texttt{criu\_set\_images\_dir\_fd(fd)}, bei der Nutzung der C-API muss \texttt{fd} ein bereits geöffneter FD auf das Verzeichnis sein in das das Image geschrieben werden soll
-    \item Spezifizierung der nötigen Zusatzinformationen, insbesondere \texttt{--shell-job} beziehungsweise \texttt{criu\_set\_shell\_job(true)}, \texttt{--tcp-established} beziehungsweise \texttt{criu\_set\_tcp\_established(true)} und andere externe Ressourcen falls nötig
+    \item Falls RPC genutzt werden soll, muss der CRIU-Service bereits aktiv sein (beispielsweise zu starten durch \texttt{criu service}), falls die C-API genutzt wird, muss diese mittels \texttt{criu\_init\_opts()} initialisiert werden.
+    \item Man bestimmt, welchen laufenden Prozess man checkpointen möchte, meist über die \texttt{PID} durch Nutzung der \texttt{--tree \$PID} Option beziehungsweise \texttt{criu\_set\_pid(pid)}. Falls sich ein Prozess über die C-API selbst checkpointen möchte, muss \texttt{criu\_set\_pid} nicht explizit aufgerufen werden. Zusätzlich wird angegeben, ob der Prozess nach dem Checkpointing fortgesetzt werden oder beendet werden soll.
+    \item Man gibt einen Pfad oder einen FD für das Image-Directory an, entweder über die \texttt{--images-dir \$IMGDIR} Option oder \texttt{criu\_set\_images\_dir\_fd(fd)}, bei der Nutzung der C-API muss \texttt{fd} ein bereits geöffneter FD auf das Verzeichnis sein, in das das Image geschrieben werden soll.
+    \item Spezifizierung weiterer Zusatzinformationen, beispielsweise \texttt{--shell-job} beziehungsweise \texttt{criu\_set\_shell\_job(true)}, \texttt{--tcp-established} beziehungsweise \texttt{criu\_set\_tcp\_established(true)}.
     \item Modifikation der Socket-Location des Services, des Log-Levels, Log-Files, \dots falls nötig oder erwünscht
 \end{itemize}
-Diese Optionen werden dann mit der entsprechenden Operation, beispielsweise Checkpointing (\texttt{criu dump}, \texttt{criu\_dump()}) oder Restoring (\texttt{criu restore}, \texttt{criu\_restore()}), kombiniert, diese wird dann von CRIU ausgeführt. Wird ein Shell-Job restored so wird dieser direkt an das laufende Terminal attached.
+Diese Optionen werden dann mit der entsprechenden Operation, beispielsweise Checkpointing (\texttt{criu dump}, \texttt{criu\_dump()}) oder Restoring (\texttt{criu restore}, \texttt{criu\_restore()}), kombiniert, diese wird von CRIU ausgeführt. Wird ein Shell-Job restored, so wird dieser direkt an das laufende Terminal attached.
 
 \subsection{Funktionsweise}
-Wie bereits in der Übersicht verschiedener C/R-Systeme angeschnitten ist CRIU ein Userspace-C/R-Tool welches jedoch dabei Kernel-Features wie beispielsweise \texttt{prctl} aus dem \texttt{CONFIG\_CHECKPOINT\_RESTORE} Kernel-Feature oder die \texttt{TCP\_REPAIR}-Flag verwendet um Anwendungen möglichst vollständig wiederherstellen zu können ohne dabei eine komplette Kopie aller Kernelinformationen im Userspace aufbauen und permanent erhalten zu müssen wie dies beispielsweise bei DMTCP der Fall ist. 
-Dies bedeutet insbesondere auch, dass die zu checkpointene Anwendung weder zur Kompilierzeit noch zum Zeitpunkt des Anwendungsstartes sich der zukünftigen Checkpointopeartion bewusst sein muss und keine besonderen Vorbereitungen für das Checkpointen einer Anwendung getroffen werden müssen.
-Die von CRIU genutzten Kernel-Features sind im Mainline-Linux-Kernel enthalten und es sind sogar alle nötigen Features aktiviert, insbesondere \texttt{CONFIG\_CHECKPOINT\_RESTORE}, ein Feature welches eine Reihe von für C/R nützlichen Tools und Informationen enabled, beispielsweise \texttt{prctl} zur Manipulation von Prozessen oder eine Erweiterung der in \texttt{/proc/} verfügbaren Informationen beispielsweise um die \texttt{/proc/<pid>/map\_files} erweitert, \texttt{CONFIG\_NAMESPACES} sowie Features für diverse spezielle Namespaces, namentlich UTS, IPC, PID und Network Namespaces, sowie diverse Features zum Monitoring verschiedener Socket-Arten.\\
-Das Checkpointing folgt im Großen und Ganzen grob dem oben beschriebenen Muster:
+Wie bereits in der Übersicht verschiedener C/R-Systeme erwähnt ist CRIU ein Userspace-C/R-Tool, welches jedoch dabei Kernel-Features wie beispielsweise \texttt{prctl} aus dem \texttt{CONFIG\_CHECKPOINT\_RESTORE} Kernel-Feature oder die \texttt{TCP\_REPAIR}-Flag verwendet, um Anwendungen möglichst vollständig wiederherstellen zu können, ohne dabei eine komplette Kopie aller Kernelinformationen im Userspace aufbauen und permanent erhalten zu müssen, wie dies beispielsweise bei DMTCP der Fall ist. 
+Dies bedeutet insbesondere auch, dass die zu checkpointende Anwendung weder zur Kompilierzeit noch zum Zeitpunkt des Anwendungsstartes sich des zukünftigen Checkpointings bewusst sein muss.
+Die von CRIU genutzten Kernel-Features sind im Mainline-Linux-Kernel enthalten und es sind alle nötigen Features aktiviert, insbesondere:
+\begin{itemize}
+    \item \texttt{CONFIG\_CHECKPOINT\_RESTORE}, ein Feature, das eine Reihe von für C/R relevante Tools und Informationen enabled, beispielsweise \texttt{prctl} zur Manipulation von Prozessen oder eine Erweiterung der in \texttt{/proc/} verfügbaren Informationen, beispielsweise um die \texttt{/proc/<pid>/map\_files}. 
+    \item \texttt{CONFIG\_NAMESPACES} sowie Features für diverse spezielle Namespaces, namentlich UTS, IPC, PID und Network Namespaces.
+    \item Weitere Features zum Monitoring verschiedener Socket-Arten.
+\end{itemize}
+Das Checkpointing erfolgt in folgenden Schritten:
 \begin{enumerate}
-    \item Einfrieren des Prozessbaumes. Dies geschieht auf eine von zwei Arten: Entweder, falls möglich, durch die Nutzung einer freezer cgroup, oder ansonsten durch das Traversieren des PID-Baumes in \texttt{/proc/} und anhalten der Prozesse durch die Nutzung der \texttt{PTRACE\_SEIZE} Anweisung.
-    \item Erfassen von Informationen wie den Virtuellen Speicherbereichen, Registern, \dots durch das Lesen entsprechender \texttt{/proc/} Einträge und ptrace.
+    \item Einfrieren des Prozessbaumes. Dies geschieht auf eine von zwei Arten: Entweder, falls möglich, durch die Nutzung einer freezer cgroup, oder ansonsten durch das Traversieren des PID-Baumes in \texttt{/proc/} und Anhalten der Prozesse durch die Nutzung der \texttt{PTRACE\_SEIZE} Anweisung.
+    \item Erfassen von Informationen wie den virtuellen Speicherbereichen, Registern, \dots durch das Lesen entsprechender \texttt{/proc/} Einträge und die Nutzung von ptrace.
     \item Injektion eines Parasiten-Code-Blobs in die Anwendung mittels ptrace. Dieser Parasit kann nun die fehlenden Prozessinformationen extrahieren, hierfür wird die Anwendung kurzfristig wieder aufgetaut.
-    \item Entfernung des Parasiten mittels ptrace, Schreiben des Images und Fortsetzung der Ausführung der Anwendung.
+    \item Entfernung des Parasiten mittels ptrace, Schreiben des Images und Fortsetzen der Ausführung der Anwendung.
 \end{enumerate}
-Der Parasit ist hierbei eine PIE welche mittels ptrace in die Anwendung injiziert wird. Dies geschieht in zwei Schritten: Zuerst wird ein Stück Code mittels ptrace so in die Anwendung injiziert, dass dieses nach dem Auftauen der Anwendung ausgeführt wird und somit Shared Memory für den eigentlichen Parasiten zur Verfügung stellen kann. Dann wird die Anwendung kurzfristig aufgetaut, das Shared Memory zur Verfügung gestellt und die Ausführung des Parasiten angestoßen. Der Parasit wartet auf Anweisung des CRIU-Prozesses, zumeist ob des Erfassens von Informationen wie Memory-Inhalten und Credentials, und führt diese aus. Zuletzt sendet der CRIU-Prozess noch eine \texttt{PARASITE\_CMD\_FINI} Anweisung an den Parasiten, dieser terminiert sich selbst und wird anschließen vom CRIU-Prozess durch das unmappen des Shared Memories entfernt.\\
-Das Restoring weicht etwas weiter vom oben beschriebenen Muster ab:
+Der Parasit ist hierbei eine PIE (Position-independent executable), welche in zwei Schritten in die Anwendung injiziert wird: Zuerst wird ein Stück Code mittels ptrace so in die Anwendung injiziert, dass dieses nach dem Auftauen der Anwendung ausgeführt wird und somit Shared Memory für den eigentlichen Parasiten zur Verfügung stellen kann. Dann wird die Anwendung kurzfristig aufgetaut, das Shared Memory zur Verfügung gestellt und die Ausführung des Parasiten angestoßen. Der Parasit wartet auf Anweisung des CRIU-Prozesses, zumeist zum Erfassen von Informationen wie Memory-Inhalten und Credentials, und führt diese aus. Zuletzt sendet der CRIU-Prozess noch eine \texttt{PARASITE\_CMD\_FINI} Anweisung an den Parasiten, dieser terminiert sich selbst und wird anschließend vom CRIU-Prozess durch das Unmappen des Shared Memories entfernt.\\
+Das Restoring weicht etwas vom in Kapitel 3.1.1 beschriebenen Muster ab:
 \begin{enumerate}
-    \item Lesen des Images und Zuweisung von Shared Ressources zu Prozessen so das diese nur einmal wiederhergestellt werden.
-    \item Forken der CRIU-Anwendung um einen Prozessbaum entsprechend dem der Anwendung zu erzeugen.
+    \item Lesen des Images und Zuweisung von Shared Ressources zu Prozessen, so dass diese nur einmal wiederhergestellt werden.
+    \item Forken der CRIU-Anwendung, um einen Prozessbaum entsprechend dem der Anwendung zu erzeugen.
     \item Wiederherstellen eines Großteils der Prozessinformationen, insbesondere Speicherinhalte (jedoch nicht die exakten Mappings), Sockets, Namespaces, \dots
-    \item Ersetzen der Forks durch einen weiteren Code-Blob, den Restorer Context, Wiederherstellung aller verbleibender Informationen, insbesondere exakte Memory Mappings, Credentials, Operationen die von Credentials abhängen wie fork-with-pid und Threads durch den Restorer-Context, unmapping des Restorer-Context und Fortsetzen der planmäßigen Ausführund der Anwendung.
+    \item Ersetzen der Forks durch einen weiteren Code-Blob, den Restorer Context. Wiederherstellen aller verbleibender Informationen, insbesondere exakte Memory Mappings, Credentials, Operationen, die von Credentials abhängen wie fork-with-pid und Threads durch den Restorer-Context, Unmapping des Restorer-Contexts und Fortsetzen der planmäßigen Ausführung der Anwendung.
 \end{enumerate}
-Der Restorer-Blob ist, ebenso wie der Parasit, ein PIE-kompiliertes Stück Code welches kurzfristig in Shared Memory im Anwendungsprozess lebt um dort Aufgaben der CRIU-Anwendung zu übernehmen. Dabei agiert der Restorer-Context als Verbindungsstück zwischen dem CRIU-Fork und dem eigentlich Anwendungsprozess und reorgansiert beispielsweise die bereits in Schritt 3 gefüllten VMAs so dass die Mappings mit der Anwendung übereinstimmen oder stellt die korrekten PIDs wieder her.\\
-Die entstehenden CRIU Images bestehen aus mehreren Dateien organsiert in dem beim Checkpointing spezifizierten Ordner, diese fallen in drei Kategorien: Dateien im Protobuff-Format welche einen Großteil der eigentlichen Checkpoint-Informationen enthalten wie zum Beispiel generelle Checkpointing Informationen in \texttt{inventory.img} oder Informationen über die Credentials wie uid in \texttt{creds.img}, CRIU-spezifische Binary-Images welche beispielsweise die Memory-Inhalte und Pagemaps enthalten und Dateien die durch Drittparteianwendungen generiert wurden uns beispielsweise Routing- und Netzwerkinformationen enthalten.
+Der Restorer-Blob ist, ebenso wie der Parasit, ein PIE-kompiliertes Stück Code, welches kurzfristig in Shared Memory im Anwendungsprozess lebt, um dort Aufgaben der CRIU-Anwendung zu übernehmen. Dabei agiert der Restorer-Context als Verbindungsstück zwischen dem CRIU-Fork und dem eigentlichen Anwendungsprozess. Er reorganisiert beispielsweise die bereits in Schritt 3 gefüllten Virtual Memory Areas, so dass die Mappings mit der Anwendung übereinstimmen, und stellt die korrekten PIDs wieder her.\\ \\
+Die beim Checkpointing entstehenden CRIU Images bestehen aus mehreren Dateien, organisiert in dem beim Checkpointing spezifizierten Ordner. Die Dateien fallen in drei Kategorien: \begin{itemize}
+    \item Dateien im Protobuff-Format, welche einen Großteil der eigentlichen Checkpoint-Informationen enthalten, wie zum Beispiel generelle Checkpointing Informationen in \texttt{inventory.img} oder Informationen über die Credentials in \texttt{creds.img}
+    \item CRIU-spezifische Binary-Images, welche beispielsweise die Memory-Inhalte und Pagemaps enthalten
+    \item Dateien in einem CRIU-unspezifischen Format die allgemeine Systeminformationen wie Routing- und Netzwerkinformationen enthalten.
+\end{itemize}
 
 \subsection{Capabilities}
-TODO\\
+%TODO Capabilities\\
+
 What can we restore with CRIU? Pretty much any program, independent of language etc, does not require linking with some interception library, marking at start, ... CRIU also can restore pretty much any feature we could find, especially established TCP connection.
-\subsection{Probleme}
-Da CRIU nicht für eine Anwendung in Fuzzing- oder ähnlichen Hoch-Frequenz-Restoring-Kontexten entwickelt wurde entstehen bei der Anwendung zunächst ein paar Probleme:
+\subsection{Fuzzing-Vorbereitungen}
+Da CRIU nicht für eine Anwendung in Fuzzing- oder ähnlichen Hoch-Frequenz-Restoring-Kontexten entwickelt wurde, bestehen bei der Nutzung von CRIU in diesen Kontexten zunächst einige Probleme:
 \begin{enumerate}
-    \item Das mehrfache Wiederherstellen eines Anwendungspaars mit etablierter TCP-Verbindung scheitert da die Verbindung bei späteren Restores resettet wird. Dies wird normalerweise, bei Checkpointing/Dumping und einfachem Restoring, durch entsprechende Firewallregeln, gesetzt direkt nach dem Dumping, verhindert, diese Regeln werden während des Restoring wieder entfernt. Bei weiteren Restores sind diese Regeln also nichtmehr vorhanden.
-    \item CRIU stellt Anwendungen unter der gleichen PID wie zum Zeitpunkt des Checkpointings wieder her - wurde diese PID aber nach dem Checkpointing und vor dem Restoring wieder vergeben so scheitert das Restoring.
-    \item Bei existierenden Netzwerkverbindungen ist zu beachten, dass diese zumeist eine beschränkte Lebenszeit haben, eine Zeit nach der die Verbindung geschlossen wird wenn keine Kommunikation statt findet. Diese Zeit wird beispielsweise für TCP-Verbindung unter Linux nicht in tatsächlicher Prozesslaufzeit gemessen sondern als Differenz zwischen gespeicherter Zeit für die letzte Kommunikation und momentaner Systemzeit berechnet - wenn nun also ein Prozess nach diesem Zeitfenster, der Linux-Default sind 7200 Sekunden, wiederhergestellt wird so wird die Verbindung direkt ob des Überschreitens der TCP Keepalive Time geschlossen.
+    \item Das mehrfache Wiederherstellen eines Anwendungspaars mit etablierter TCP-Verbindung scheitert, da die Verbindung bei späteren Restores resettet wird. Dies wird normalerweise, bei Checkpointing/Dumping und einfachem Restoring, durch entsprechende iptables-Regeln, gesetzt direkt nach dem Dumping, verhindert, diese Regeln werden während des Restoring wieder entfernt. Bei weiteren Restores sind diese Regeln also nicht mehr vorhanden.
+    \item CRIU stellt Anwendungen unter der gleichen PID wie zum Zeitpunkt des Checkpointings wieder her - wurde diese PID aber nach dem Checkpointing und vor dem Restoring wieder vergeben, so scheitert das Restoring.
+    \item Bei existierenden Netzwerkverbindungen ist zu beachten, dass diese zumeist eine beschränkte Lebenszeit haben, eine Zeit, nach der die Verbindung geschlossen, wird wenn keine Kommunikation statt findet. Diese Zeit wird beispielsweise für TCP-Verbindung unter Linux nicht in tatsächlicher Prozesslaufzeit gemessen, sondern als Differenz zwischen gespeicherter Zeit der letzten Kommunikation und momentaner Systemzeit berechnet - wenn nun also ein Prozess nach diesem Zeitfenster, der Linux-Default ist 7200 Sekunden, wiederhergestellt wird, so wird die Verbindung direkt wegen des Überschreitens der sogenannten TCP Keepalive Time geschlossen.
 \end{enumerate}
-Glücklicherweise gibt es für diese Probleme Lösungen die eine Nutzung in einem Fuzzing-Umfeld ermöglichen sollten.\\
-Das TCP-RST-Problem lässt sich durch manuelles Setzen eben dieser Regeln direkt nach der Beendung der Ausführung der Anwendungen lösen, beispielsweise wie in Listing [TODO] zu sehen.
+Für die genannten Probleme gibt es Lösungen, die eine Nutzung in einem Fuzzing-Umfeld ermöglichen.\\
+Das TCP-RST-Problem (Nummer 1) lässt sich durch manuelles Setzen eben dieser Regeln direkt nach der Beendigung der Ausführung der Anwendungen lösen, beispielsweise wie in Listing 8 zu sehen.
 \begin{lstlisting}[caption=Setzen der Firewallregeln, language=C]
     // [...]
 
@@ -428,27 +511,27 @@ Das TCP-RST-Problem lässt sich durch manuelles Setzen eben dieser Regeln direkt
     system(iptables3);
     system(iptables4);
 \end{lstlisting}
-Die Problematik belegter PIDs lässt sich durch die Isolation der Anwendung durch beispielsweise eine virtuelle Maschine beziehungsweise einen Container oder die Nutzung von PID Namespaces lösen. 
-Unter Umständen ließe sich das PID-Problem auch durch die Deaktivierung der \texttt{--shell-job} Option lösen, dies würde jedoch das Ausführen der Anwendungen in einer eigenen Session erfordern - etwas das Fuzzing-Engines im Allgemeinen nicht unterstützen.\\
-Das TCP Keepalive Timeout und ähnliche Probleme ließen sich auf mehrere Arten und Weise lösen sollten sie ein Problem sein - entweder könnte die Zeit bis zum Timeout verlängert werden durch beispielsweise \texttt{echo \$new\_time\_in\_s > /proc/sys/net/ipv4/tcp\_keepalive\_time} auf einen genügend großen Wert oder durch Manipulation des Zeitpunktes der letzten Nachricht im Image.
+Die Problematik belegter PIDs (Nummer 2) lässt sich durch die Isolation der Anwendung durch beispielsweise eine Virtuelle Maschine beziehungsweise einen Container oder die Nutzung von PID Namespaces lösen. 
+Unter Umständen ließe sich das PID-Problem auch durch die Deaktivierung der \texttt{--shell-job} Option lösen, dies würde jedoch das Ausführen der Anwendungen in einer eigenen Session erfordern - etwas die betrachteten Fuzzing-Engines jedoch nicht unterstützen.\\
+Der TCP Keepalive Timeout (Nummer 3) und verwandte Probleme lassen sich auf mehrere Arten und Weisen lösen, sollten sie ein Problem darstellen. Entweder kann die Zeit bis zum Timeout verlängert werden \footnote{\texttt{echo \$new\_time\_in\_sec > /proc/sys/net/ipv4/tcp\_keepalive\_time}} oder der erfasste Zeitpunkt der letzten Nachricht im CRIU-Image kann angepasst werden.
 %It does not work out of the box in a fuzzing context, due to: 1. Firewall rules and resets, we can fix that by adding those manually after each iteration. 2. PIDs are already in use again. There could be two fixes here: Either putting it in it's own pid namespace or possibly by running it in a context that does not require exact PID matches, e.g. detached from the shell, ...
 \subsection{Performance}
-Bei der Betrachtung der Performance von C/R-Systemen gibt es zumeist zwei Komponenten zu betrachten: 
+Bei der Betrachtung der Performance von C/R-Systemen sind zwei Aspekte zu betrachten: 
 \begin{itemize}
-    \item Die Performanceeinflüsse zur Laufzeit des Programms, ausgelöst beispielsweise durch das Sammeln von Informationen die für das Checkpointing relevant sind
-    \item Die benötigte Zeit für das Durchführen der tatsächlichen Checkpointing- und Restore-Operationen
+    \item Die Performanceeinflüsse auf die Laufzeit des Programms, ausgelöst beispielsweise durch das Sammeln von Informationen, die für das Checkpointing benötigt werden
+    \item Die benötigte Zeit für die Durchführung der tatsächlichen Checkpointing- und Restore-Operationen
 \end{itemize}
-Ersteres, Performanceeinflüsse des laufenden Programms, sind bei C/R-Systemen wie CRIU jedoch nicht-existent, da vor dem Checkpointing weder dem Kernel noch der Anwendung selbst bewusst ist, dass sie gecheckpointed werden wird, und nach dem Restoring zwar Reste des Restorer Context Blobs noch in Memory vorhanden sein können, diese sich jedoch nicht mit dem Anwendungscode überschneiden und entsprechenden im Normalfall keinen Einfluss auf die weitere Performance haben werden.\\
-Die Geschwindingikeit mit der Checkpointing und Restore Operationen durchgeführt werden können spielt für klassische Zwecke wie Debugging oder Fault-Recovery zumeist eine untergeordnete Rolle, da wir hier zumeist die Anwendung nur eine handvoll Male checkpointen und restoren, die Grenzen der Akzeptabilität der Wartezeit hier zumeist durch menschliche Interaktion oder die normal erwartete Startup-Zeit bestimmt werden.
-Bei Nutzung von C/R-Systemen für Fuzzing sieht dies natürlich anders aus - die Geschwindigkeit mit der wir Anwendungen wiederherstellen können $T_{Restore}$ ist wie wir in Kapitel 3 von hoher Relevanz für das C/R-fuzzen von Anwendungen, da wir für jeden Testfall mindestens einmal restoren müssen.\\
+Ersteres, Performanceeinflüsse auf das laufenden Programm, treten bei C/R-Systemen wie CRIU nicht auf, da vor dem Checkpointing weder dem Kernel noch der Anwendung selbst bewusst ist, dass sie gecheckpointed werden wird, und nach dem Restoring zwar Reste des Restorer Context Blobs noch in Memory vorhanden sein können, diese jedoch nicht mit dem Anwendungscode interagieren und entsprechend keinen Einfluss auf die weitere Performance haben werden.\\
+Die Geschwindingkeit, mit der Checkpointing und Restore Operationen durchgeführt werden können, spielt für klassische Zwecke wie Debugging oder Fault-Recovery zumeist eine untergeordnete Rolle. 
+Hier wird zumeist die Anwendung nur wenige Male gecheckpointet und restoret, und die Grenzen der Akzeptabilität der Wartezeit werden zumeist durch menschliche Interaktion oder die normal erwartete Startup-Zeit bestimmt.
+Bei Nutzung von C/R-Systemen für Fuzzing sieht dies natürlich anders aus: Die Dauer einer Restore-Operation $T_{Restore}$ ist wie in Kapitel 4 dagelegt von hoher Relevanz für das C/R-Fuzzen, da das Fuzz-Target für jede Iteration einmal restoret werden muss.\\
 Die benötigten Zeiten für C/R-Operationen hängen dabei von einer Reihe von verschiedenen Umständen ab, unter anderem:
 \begin{itemize}
-    \item Allokierter/Genutzter Speicher der Anwendung
+    \item allokierter/genutzter Speicher der Anwendung
     \item Größe des Prozessbaumes
     \item Auswahl zu restorender Features wie TCP-Sockets
-    \item TODO: Mehr?
 \end{itemize}
-Da natürlich auch externe Einflüsse wie Hardware, Auslastung, \dots einen Einfluss auf die Performance haben und diese Zeiten zumeist, wie oben beschrieben, nicht von hoher Relevanz in der Nutzung sind ist der Vergleich der Performance aus der Literatur heraus zumeist nicht möglich.\\
+Da natürlich auch externe Einflüsse wie Hardware, Auslastung des Systems, \dots einen Einfluss auf die Performance haben und diese Zeiten zumeist, wie oben dargelegt, nicht von hoher Relevanz in der klassischen Nutzung sind, liegen in der Literatur kaum relevante Vergleiche der Performance verschieder C/R-Systeme vor.
 
 % Iterationen, 1bit, 100bit, 100^2bit, 100^3bit, 100^4bit, tcp
 % 10
@@ -459,7 +542,7 @@ Da natürlich auch externe Einflüsse wie Hardware, Auslastung, \dots einen Einf
 \begin{figure}
 \begin{tabular}{| l | l  l  l  l  l | l |}
     \toprule
-    Iterationen & $100^0$byte & $100^1$byte & $100^2$byte & $100^3$byte & $100^4$byte & TCP \\
+    Iterationen & $1$byte & $10^2$byte & $10^4$byte & $10^6$byte & $10^8$byte & TCP \\
     \midrule
     10 & 0.292s & 0.290s & 0.292s & 0.301s & 0.627s & 0.982s \\
     50 & 1.269s & 1.269s & 1.256s & 1.298s & 2.332s & 4.615s \\
@@ -473,17 +556,17 @@ Da natürlich auch externe Einflüsse wie Hardware, Auslastung, \dots einen Einf
 \end{figure}
 \end{center}
 
-Abbildung [TODO: Performancemessung] zeigt die Ergebnisse von Performancemessung in Hinsicht auf Laufzeit eines Launchers der Anwendungen startet, checkpointed und dann diese wiederholt wiederherstellt sobald die Anwendung terminiert. Diese Messung fand auf einem Lenovo Thinkpad X230 statt, die Laufzeiten sind das arithmetische Mittel jeweils mehrerer Messungen, für die gesamten Ergebnisse siehe Anhang [TODO].
+Abbildung 2 zeigt die Ergebnisse unserer Performancemessung in Hinsicht auf Laufzeit eines Launchers, der Anwendungen startet, checkpointet, und diese wiederholt wiederherstellt, sobald die Anwendung terminiert. Diese Messung fand auf einem Lenovo Thinkpad X230 statt, die Laufzeiten sind das arithmetische Mittel jeweils mehrerer Messungen, für die gesamten Ergebnisse siehe Anhang [TODO].
 Die Anwendungen sind dabei
 \begin{enumerate}
-    \item Eine einzelne Anwendung die eine bestimmte Anzahl bytes zufällige Daten ließt, sich selbst checkpointed und dann eine sehr simple Operation auf den Daten ausführt und das Ergebnis auf \texttt{stdout} ausgibt (TODO: Anhang)
-    \item Ein Client-Server-Paar das eine TCP-Verbindung aufbaut, sich selbst checkpointen und dann sich gegenseitig jeweils ein kurzes Datenpaket zusenden, dabei Informationen über den Zustand auf \texttt{stdout} ausgeben (TODO: Code im Anhang)
+    \item Eine einzelne Anwendung, die eine bestimmte Anzahl Bytes zufälliger Daten liest, sich selbst checkpointed, eine sehr simple Operation auf den Daten ausführt, und das Ergebnis auf \texttt{stdout} ausgibt (TODO: Anhang)
+    \item Ein Client-Server-Paar, welches eine TCP-Verbindung aufbaut, sich selbst checkpointet sich gegenseitig jeweils ein kurzes Datenpaket zusendet und dabei Informationen über den Zustand auf \texttt{stdout} ausgeben (TODO: Code im Anhang)
 \end{enumerate}
-Dabei setzen sich die Zeitmessungen über $n$ Iterationen wie in Gleichung [TODO] zusammen. 
-Durch die Kombination von Messungen mit verschiedenen Iterationen, siehe Gleichung [TODO], lässt sich dies dann als lineares Gleichungssystem formulieren und sowohl $T_1$ als auch $T_2$ abschätzen. 
-Dabei fällt auf, dass $T_{Execute}$ mit individuell gemessenen Zeiten von relevant unter $1ms$ in $T_2$ vernachlässigt werden kann, also der so erhaltene Wert von $T_2$ bereits eine sehr gute Approximation für $T_{Restore}$ ist. 
+Dabei setzen sich die Zeitmessungen über $n$ Iterationen $T(n)$ wie in Gleichung 7 zusammen. 
+Durch die Kombination von Messungen mit verschiedenen Iterationen, siehe Gleichung 8, lässt sich dies dann als lineares Gleichungssystem formulieren und sowohl $T_1$ (Ausführung bis inklusive Checkpointing) als auch $T_2$ (iteriertes Restore und Execute) abschätzen. \\
+$T_{Execute}$ wurde aus dem Programm heraus als deutlich unter $1{ms}$ gemessen, das heißt $T_2 = T_{Restore} + T_{Execute}$ kann bei den erhaltenen Werten als eine sehr gute Approximation für $T_{Restore}$ angesehen werden.
 \begin{equation}
-    T(n) = T_1) + n T \coloneqq (T_{Setup} + T_{Checkpoint}) + n (T_{Restore} + T_{Execute})
+    T(n) = T_1 + n T_2 \coloneqq (T_{Setup} + T_{Checkpoint}) + n (T_{Restore} + T_{Execute})
 \end{equation}
 
 \begin{equation}
@@ -492,35 +575,24 @@ Dabei fällt auf, dass $T_{Execute}$ mit individuell gemessenen Zeiten von relev
     T(n_2) = T_1 + n_2 T_2
     \end{split}
 \end{equation}
-Damit ergeben sich nun also nun mittlere Wiederherstellungszeiten, je Iteration, von ca. $24ms$ für die einfach Wiederherstellung sowie zusätzliche Zeit je nach Menge von genutztem Speicher und Zeiten von ca. $90ms$ für die Wiederherstellung von einem Client-Server-Paar mit bestehender TCP-Verbindung - dies sollte auch schon bereits die Dauer der Wiederherstellung einer einzelnen solchen TCP-Anwendung sein, da der Restore in mehreren Prozessen zugleich geschieht.\\
-Damit liegen zumindest die Checkpoint- und Restore-Zeiten für die Nicht-TCP-Anwendungen, für TCP-Verbindungen waren wir nicht in der Lage vergleichbare Zahlen zu finden, relevant über denen von Linux-CR - dort wurden auf älterer Hardware Restore-Zeiten von $\leq 1ms$ erreicht. Wir vermuten, dass dies auf die verschiedenen Ansätze zum Restoring zurückzuführen ist, insbesondere benötigt Linux-CR nicht die Injektion der Blobs durch \texttt{ptrace} und den damit verbundenen Overhead da Linux-CR direkt mit Kernel-Ressourcen arbeiten kann. Insbesondere heißt dies aber, dass, obwohl kontemporäre starke C/R-Tools recht lange Checkpoint- und Restore-Zeiten haben, diese nicht optimal sind und es noch Optimierungspotential in dieser Richtung gibt, wir können bei einer generellen Bewertung der Möglichkeiten von C/R-Fuzzing also noch mit einer Verbesserung dieser Werte rechnen.
+Hiermit erkennt man aus Abbildung 2, dass die "Grundkosten" bei CRIU für einen einzelnen Restore bei ca. $24ms$ für ein triviales Fuzz-Target liegen würden, bei höherem Speicherverbrauch oder komplexeren Anwendungen wie einem Client-Server-Paar kann dies leicht auf $90ms$ oder mehr steigen. 
+Mit individuell gemessenen Setup-Zeiten von maximal $10{ms}$ ist zu erkennen, dass mit CRIU in den betrachteten Anwendungsszenarien gemäß Gleichung 3 in Kapitel 4.1 keine Laufzeitersparnis sondern sogar ein signifikanter Laufzeitverlust erzielt würde.\\ %TODO
+Ähnliche Untersuchungen simpler, insbesondere nicht vernetzter, Anwendungen mit Linux-CR\cite{linuxcr} erreichten auf älterer Hardware Restore-Zeiten von $\leq 1{ms}$. 
+Wir vermuten, dass diese Diskrepanz auf die verschiedenen Ansätze zum Restoring zurückzuführen ist, insbesondere benötigt Linux-CR nicht die Injektion der Blobs durch \texttt{ptrace} und den damit verbundenen Overhead, da Linux-CR direkt mit Kernel-Ressourcen arbeiten kann. 
+Insbesondere heißt dies aber, dass auch wenn verfügbare mächtige C/R-Tools recht lange Checkpoint- und Restore-Zeiten beobachten lassen, es noch Optimierungspotential in dieser Richtung gibt.
+Wir können bei einer generellen Bewertung der Möglichkeiten von C/R-Fuzzing also noch mit einer Verbesserung dieser Werte rechnen, wenn entsprechende Entwicklungsanstrengungen unternommen werden.
 
-% Here are estimates for performance, as in "$T_{Restore} = x$. There are also comparisons to benchmarks for other fuzzing engines we found, especially Linux-CR which seems to have way better performance (though we were not able to get Linux-CR working on our machine so we have to rely on data from their paper). Short discussion what makes CRIU so much slower than Linux-CR and what performance depends on anyway.
+\section{C/R-Fuzzing: Implementierung}
+Dieses Kapitel untersucht die Nutzbarkeit der in Kapitel 2.4 und 2.5 vorgestellten Fuzzing-Engines für C/R-Fuzzing mit C/R-Tools am Beispiel von CRIU nach dem in Kapitel 4.2.1 vorgestellten Ansatz. %TODO: Vorwärtsverweis?
 
-
-\section{TODO: CRIU + Fuzzing Engines}
-Schlussendlich wollen wir in diesem Kapitel nun einen Blick auf kontemporäre Fuzzing-Engines werfen, insbesondere ob ihrer Nutzbarkeit für C/R-Fuzzing mit gegebenen C/R-Tools, speziell CRIU. Die Fuzzing Engines die wir dabei betrachten werden sind afl-fuzz (american fuzzy lop) und libfuzzer.
-\subsection{Fuzzing-Engines}
-Die hier betrachteten Fuzzing Engines libfuzzer und afl wurden von uns ausgewählt, da sie zwei der etablierteren Fuzzing Engines sind. 
-Beide haben zur Auffindung einer ganzen Reihe von Bugs beigetragen und sind Teil von Googles OSS-Fuzz-Projekts - ein Projekt welches durch kontinuierliches Fuzzing durch Google versucht die Sicherheit und Stabilität von relevanter Open Sourcen Software zu verbessern.
-Sowohl libfuzzer als auch afl folgen im allgemeinen der obigen Beschreibung von Fuzzern, unterscheiden sich jedoch in der exakten Umsetzungen in einigen Punkten.
-\subsubsection{Funktionsweise: libfuzzer}
-Die Nutzung libfuzzers folgt einem recht strikten aber simplen Schema dank der Integration in das llvm-Projekt und insbesondere in dessen Frontend, clang:
-\begin{enumerate}
-    \item Schreibe ein Fuzz-Target, ein Stück Code welches eine zu fuzzende Funktion, in Normalfall \texttt{LLVMFuzzerTestOneInput}, zur Verfügung stellt welche als Argumente ein Array von \texttt{uint8\_t} und die Länge dieses Arrays in \texttt{size\_t} erwartet. 
-    \item TODO
-\end{enumerate}
-TODO
-\subsubsection{afl}
-TODO
-
-
-\subsection{Fuzzing-Engines und C/R-Fuzzing}
-\subsubsection{libfuzzer}
-Um die Nutzbarkeit libfuzzers für C/R-Fuzzing zu testen implementierten wir ein simples Fuzz-Target wie in Kapitel 3.2.1, Listing 6, siehe Anhang [TODO]. Der Umweg des Inputdumpings ist zwingend notwendig, da libfuzzer den Input immer als Argument bei Aufruf übergibt. Bei der Ausführung ergaben sich jedoch bei uns einige Probleme:
+\subsection{libFuzzer} %TODO libFuzzer!
+Um die Nutzbarkeit libFuzzers für C/R-Fuzzing zu testen, implementierten wir ein beispielhaftes Fuzz-Target wie in Kapitel 4.2.1, Listing 6, siehe Anhang [TODO].
+Das Zwischenspeichern des Inputs ist zwingend notwendig, da libFuzzer den Input immer als Argument beim Aufruf übergibt. 
+Eine erfolgreiche Ausführung wurde unter anderem durch folgende Probleme verhindert:
 \begin{itemize}
-    \item Ist AddressSanitizer aktiviert so scheitert CRIU bereits in der ersten Ausführung während des Checkpointings: Eine Page wird als $\tilde 300GB$ groß erkannt, die Allokierung entsprechendes Speichers scheitert und damit auch das Pagemapping und das Pagedumping mittels des Parasitencodes (siehe Listing TODO). Dies liegt daran, dass AddressSanitizer 20TB virtuellen Speicher belegt. Restore-Versuche scheitern daran, dass das Image entsprechend nicht komplett ist, insbesondere \texttt{inventory.img}, die Top-Level-Beschreibung des Images, fehlt, siehe Listing TODO. % TODO Formatting
-    \item Die Nutzung von CRIU in libfuzzer führt dazu, dass Wiederherstellung mit korrekten PIDs scheitert - und die Einbettung in einen Fuzzer macht auch die Nutzung von einem entsprechenden PID-Namespace ein Ding der Unmöglichkeit.
+    \item Ist AddressSanitizer (ASan) aktiviert, so scheitert CRIU bereits in der ersten Ausführung während des Checkpointings: Eine Page wird als $\sim 300GB$ groß erkannt, die Allokierung entsprechendes Speichers scheitert und damit auch das Pagemapping und das Pagedumping mittels des Parasitencodes (siehe Listing 9). Die Ursache hierfür ist, dass AddressSanitizer $20TB$ virtuellen Speicher allokiert. Restore-Versuche scheitern erwartungsgemäß daran, dass das Image nicht komplett erzeugt wurde (insbesondere \texttt{inventory.img}, die Top-Level-Beschreibung des Images, fehlt, siehe Listing 10).
+        Prinzipiell lässt sich ASan abschalten, allerdings beschränkt natürlich die Aussagekraft des Fuzzings.
+    \item CRIU setzt zwingend eine Wiederherstellung unter den gleichen PIDs vorraus. Andererseits hält libFuzzer die PID seine fuzzTargets dauerhaft belegt. Dies führt bei der ersten Ausführung des Fuzz-Targets mit Restore zu einem Konflikt um die PID und dem Scheitern des Restoreversuches, siehe Listing 11. Eine Isolierung der Fuzz-Targets in eigene PID-Namespaces wird durch libFuzzer nicht unterstützt.
 \end{itemize}
 \begin{lstlisting}[caption=Pagemapping/dumping Errors mit ASan]
 (00.010591) Error (criu/pagemap-cache.c:54): pagemap-cache: pmc_init: Can't allocate 30064246792 bytes
@@ -536,11 +608,26 @@ Um die Nutzbarkeit libfuzzers für C/R-Fuzzing zu testen implementierten wir ein
 (00.007567) Error (criu/cr-restore.c:1668): Pid 9177 do not match expected 8154
 (00.007683) Error (criu/cr-restore.c:2309): Restoring FAILED.
 \end{lstlisting}
-Selbst wenn diese Probleme gelöst werden sollten wäre eine Nutzbarkeit libfuzzers für C/R-Fuzzing, sowohl mit CRIU als auch anderen kontemporären C/R-Systemen, vorerst unklar, da libfuzzer zwar mit Multi-Threaded, aber nicht notwendigerweise korrekt mit Multi-Prozess-Anwendungen umgehen kann, eine allgemeine Nutzbarkeit, unabhängig von den zu testenden Programmen, unwahrscheinlich.
-\subsubsection{afl}
-Ebenso wie bei der Untersuchung libfuzzers implemetierten wir bei afl ein simples C/R-Fuzz-Target wie in Kapitel 3.2.1, Listing 6, siehe Anhang [TODO]. Das Inputdumping ist an dieser Stelle nicht notwendig, da afl die Übergabe des Inputs über einen FD erlaubt.\\
-Allerdings war es uns nicht möglich in afl auch nur den Checkpointing-Vorgang zu starten [TODO: Genau Analyse was da bei AFL schiefgeht, da arbeite ich grad noch dran... ich mag afl echt nicht].
+Selbst wenn diese Probleme gelöst werden sollten, wäre eine Nutzbarkeit libFuzzers für C/R-Fuzzing (sowohl mit CRIU als auch anderen verfügbaren C/R-Systemen) schwer vorstellbar: libFuzzer kann zwar mit Multi-Threaded, aber nicht notwendiger korrekt mit Multi-Prozess-Anwendungen betrieben werden. Eine allgemeine Nutzbarkeit, unabhängig von den zu testenden Programmen, ist unwahrscheinlich.
+\subsection{afl}
+Ebenso wie bei der Untersuchung libFuzzers implementierten wir für den afl-Test ein simples C/R-Fuzz-Target wie in Kapitel 4.2.1 beschrieben, siehe Anhang [TODO].\\
+Hier verhindert ein architekturelles Problem eine erfolgreiche Ausführung:
+Durch die Fork-Server-Optimierung in AFL wie in Kapitel 2.5 beschrieben teilt sich jede Fuzz-Target-Ausführung als Prozess Memory Areas mit dem initialen Stopped Process Image. 
+Wenn die Fuzz-Target-Ausführung CRIU-initiiert das Checkpointing ausführen soll scheitert dies, da CRIU Shared Memory Nutzung über SysVIPC entdeckt (zu einem nicht zu dumpenden Prozess) und deswegen das Checkpointing abbricht, siehe Listing 12.
+Damit steht die AFL-Architektur über Cloning mit Copy-on-Write aus einem Stopped Process Image einem C/R-System wie CRIU konzeptionell entgegen.\\
+Unabhängig von diesem Architekturproblem sind Probleme wie bei libFuzzer diskutiert absehbar:
+\begin{itemize}
+    \item Fehlender voller Multi-Process-Support
+    \item ASan-Inkompatibilität zu CRIU\footnote{Die Nutzung von ASan ist zwar nicht per Default aktiviert, eine Nutzung wäre jedoch im Normalfall empfohlen.}
+\end{itemize}
 
+\begin{lstlisting}[caption=Checkpointing Error durch Shared Memory]
+(00.017584) Error (criu/cr-dump.c:431): Task 25961 with SysVIPC shmem map @7f24f6a8b000 doesn't live in IPC ns
+(00.017590) Error (criu/cr-dump.c:1411): Dump mappings (pid: 25961) failed with -1
+(00.017622) Unlock network
+(00.017628) Unfreezing tasks into 1
+(00.017641) Error (criu/cr-dump.c:1709): Dumping FAILED.
+\end{lstlisting}
 %Now, this is where it gets annoying: CRIU - or any other CR system - doesn't work with pretty much any modern fuzzing engines, most notably as they restore processes, not threads. To fix this we would either need 1. In-Process Thread-Restoring (and there are a few reasons why that probably isn't the best of all ideas - most notably shared ressources in different stats, shared memory where both code lives, ...) 2. Multi-Process Fuzzing Engines - yeah, we don't have those yet apparently.
 
 \subsection{Fazit}
@@ -610,7 +697,10 @@ TODO
         Konstantin Serebryany, Derek Bruening, Alexander Potapenko, Dmitry Vyukov.
         \textit{AddressSanitizer: A Fast Address Sanity Checker}.
         Usenix Annual Technical Conference, 2012. \path{https://storage.googleapis.com/pub-tools-public-publication-data/pdf/37752.pdf}
-
+    \bibitem{criuhistory}
+        Pavel Emelyanov.
+        \textit{Checkpoint/restore mostly in the userspace}.
+        2011. \path{https://lwn.net/Articles/451916/}
 
 \end{thebibliography}
 
