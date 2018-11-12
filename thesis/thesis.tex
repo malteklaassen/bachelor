@@ -132,7 +132,7 @@ Ein exemplarisches Fuzzing sähe mit afl wie folgt aus:
 \begin{enumerate}
     \item Schreibe ein Fuzz-Target. Ein Fuzz-Target für afl ist im Normalfall ein beliebiges Programm, welches einen Input entweder von \texttt{stdin} oder aus einer spezifizierten Datei liest und dann den zu testenden Code mit diesem Input ausführt.
     \item Kompiliere dieses Fuzz-Target mit einem der afl-Compiler, beispielsweise \texttt{CC=/usr/bin/afl-gcc make fuzztarget}.
-    \item Führe den Fuzzer mit dem kompilierten Fuzz-Target aus: \texttt{afl-fuzz -i input\_directory -o findings\_directory -- ./fuzztarget}. Hierbei können weitere Optionen zum Verhalten des Fuzzers vor \texttt{--} und Optionen des Fuzztargets nach diesem angegeben werden.
+    \item Führe den Fuzzer mit dem kompilierten Fuzz-Target aus: \texttt{afl-fuzz -i input\_directory -o findings\_directory -- ./fuzztarget}. Hierbei können weitere Optionen zum Verhalten des Fuzzers vor \texttt{--} und Optionen des Fuzz-Targets nach diesem angegeben werden.
 \end{enumerate}
 Ebenso wie libFuzzer nutzt afl Code-Coverage-Analyse durch Binary-Instrumentation und erweitert den initial angegebenen Corpus um Inputs, welche zu einer Erweiterung der Code-Coverage führen. 
 Neue Inputs werden dabei wieder aus den Corpus-Einträgen und explizit angegebenen Regeln zur Inputmutation und -generierung erzeugt.\\
@@ -166,6 +166,7 @@ Dieses Vorgehen führt in reinen Userspace-C/R-Systemen wie DMTCP\cite{dmtcp} (D
 So können zum Beispiel nicht alle Eigenschaften eines Programmes, beispielsweise die PID, nicht ohne weiteres korrekt wiederhergestellt werden. 
 Die Intercepts benötigen alternative Libraries, die erstens spätestens zur Startzeit mit der Anwendung gelinkt werden müssen, zweitens häufig Beschränkungen darauf haben mit welchen Programmen (bspw. Sprachen) sie genutzt werden können und drittens unter Umständen die Funktionsweise des Programmes ändern könnten. Zudem sind Performanceeinbußen durch das Duplizieren von Kernelstrukturen im Userspace zu erwarten.\\ \\
 %\subsubsubsection{Kernelebene-C/R}
+Dem gegenüber steht das Checkpointing auf mit Kernelhilfe, beispielsweise BLCR\cite{BLCR} (Berkeley Lab's Linux Checkpoint/Restart), oder das Checkpointen komplett im Kernel, beispielsweise Linux-C/R\cite{linuxcr}.
 Diese C/R-Systeme nutzen den Kernel direkt, um alle nötigen Informationen während des Checkpointings zu sammeln. 
 Sie benötigen also keine Libraries für das Sammeln dieser Informationen durch das Abfangen von Syscalls und ähnlichem und haben alle nötigen Privilegien, um alle Eigenschaften der Anwendung korrekt und vollständig wiederherzustellen. 
 Allerdings muss der Kernel eben diese Funktionalitäten anbieten, damit Kernelebene-C/R-Tools eingesetzt werden können. Obwohl es wiederholt Versuche der Integration von C/R-Tools in den Linux Kernel gab, ist dies bisher nicht geschehen, das heißt es wird zur Nutzung ein gepatchter Kernel oder ein Kernel mit zusätzlichen Modulen benötigt.\\
@@ -206,14 +207,14 @@ Dazu betrachten wir zunächst generell mögliche Ansätze und ihre theoretischen
 Generell sehen wir zwei Ansätze zur Integration von Checkpoint/Restore-Tools und Fuzzern:
 \begin{enumerate}
     \item Integration des C/R-Tools in den Fuzzer selbst, das heißt der Fuzzer selbst verwaltet das Checkpointing und Restoring
-    \item Implementierung des Checkpointing und Restoring innerhalb des Fuzztargets, transparent zum Fuzzer
+    \item Implementierung des Checkpointing und Restoring innerhalb des Fuzz-Targets, transparent zum Fuzzer
 \end{enumerate}
-Die erste Alternative, ein C/R-Fuzzer, wäre eine umfassendere Lösung als die Ad-hoc-Lösung der Implementierung im Fuzztarget und bietet eine größere Palette an Möglichkeiten als die Fuzztarget-Lösung, benötigt allerdings eben einen C/R-Fuzzer: Etwas, das nach unseren Recherchen weder in Software existiert noch in Konzepten diskutiert wurde.
+Die erste Alternative, ein C/R-Fuzzer, wäre eine umfassendere Lösung als die Ad-hoc-Lösung der Implementierung im Fuzz-Target und bietet eine größere Palette an Möglichkeiten als die Fuzz-Target-Lösung, benötigt allerdings eben einen C/R-Fuzzer: Etwas, das nach unseren Recherchen weder in Software existiert noch in Konzepten diskutiert wurde.
 Ein allererster Ansatz, wenn auch nicht als C/R bezeichnet und unter anderen Aspekten erdacht ist das Fork-Server-Konzept in afl\cite{aflrestore}, siehe Kapitel 2.5. \\
 %Aim of this thesis: Answer the question wether we could solve some or all of aboves issues in using fuzzing for security testing by using C/R. In this chapter we will look at a few approaches and their requirements, general feasibility and what issues they would solve.
 %There are two generally possible approaches: 1. Using C/R in a Fuzzer that is not just aware that C/R is happening but does the C/R parts for you and makes active use of C/R for performance 2. Using a "normal" fuzzer and do all the C/R stuff in the fuzztarget
 \subsection{C/R-Fuzzer}
-Klassische moderne Fuzzer wie beispielsweise libfuzzer folgen während des Fuzzings im Allgemeinen diesem Ablauf:
+Klassische moderne Fuzzer wie beispielsweise libFuzzer folgen während des Fuzzings im Allgemeinen diesem Ablauf:
 \begin{lstlisting}[caption=Struktur klassischer Non-C/R-Fuzzer]
 Bis ein Problem auftritt:
     Generiere einen neuen Input (aus dem Seed, Corpus, Dictionary Regeln)
@@ -221,7 +222,7 @@ Bis ein Problem auftritt:
     Analysiere das Fuzz-Target während der Ausführung und update den Corpus wenn nötig
 \end{lstlisting}
 Das Fuzz-Target wird also mit verschiedenen Inputs ausgeführt, bis ein Problem auftritt. Dabei kann das Fuzz-Target im Normalfall strukturell wie in Listing 2 beschrieben in drei Blöcke zerlegt werden.
-\begin{lstlisting}[caption=Struktur klassischen Fuzztargets]
+\begin{lstlisting}[caption=Struktur klassischen Fuzz-Targets]
 Inputunabhängiges Set-Up
 Inputabhängiges Set-Up
 Zu testender Code oder Funktion
@@ -240,17 +241,16 @@ Bis ein Problem auftritt:
     Analysiere den Inputabhängigen Teil des Fuzz-Targets während der Ausführung und update den Corpus wenn nötig
 \end{lstlisting}
 Hierbei ist folgendes zu beachten: 
-Die Übergabe des Inputs muss während der Laufzeit (beispielsweise über \texttt{stdin}) erfolgen, eine Übergabe des Inputs durch Parameter zum Zeitpunkt des Aufrufes wie beispielsweise bei libfuzzer ist nicht ohne weiteres möglich. 
+Die Übergabe des Inputs muss während der Laufzeit (beispielsweise über \texttt{stdin}) erfolgen, eine Übergabe des Inputs durch Parameter zum Zeitpunkt des Aufrufes wie beispielsweise bei libFuzzer ist nicht ohne weiteres möglich. 
 Das Aufteilen des Fuzz-Targets bedeutet nicht das Aufteilen in mehrere unabhängige Code-Segmente - damit Checkpoint/Restore ohne Modifikationen funktionieren kann, muss der inputabhängige Teil bereits von Anfang an im Fuzz-Target vorhanden sein. 
 Ein solches Fuzz-Target hätte damit eine Struktur wie in Listing 4 beschrieben.
-% TODO: Fuzztarget vs Fuzz-Target
-\begin{lstlisting}[caption=Struktur C/R-Fuzzer-Fuzztarget]
+\begin{lstlisting}[caption=Struktur C/R-Fuzzer-Fuzz-Target]
 Inputunabhängiges Setup
 Breakpoint
 Inputabhängiges Setup
 Zu testender Code oder Funktion
 \end{lstlisting}
-Hierbei hält der Breakpoint die Ausführung des Fuzztargets an und informiert den Fuzzer darüber, dass er an dieser Stelle das Fuzz-Target checkpointen soll.\\
+Hierbei hält der Breakpoint die Ausführung des Fuzz-Targets an und informiert den Fuzzer darüber, dass er an dieser Stelle das Fuzz-Target checkpointen soll.\\
 Ziel eines solchen simplen C/R-Fuzzers ist es, den Overhead durch wiederholte Ausführung des Setups zu reduzieren.
 Im Folgenden bezeichnen wir mit $T_{Setup}$ die Laufzeit des inputunabhängigen Setups, mit $T_{Execution}$ die (mittlere) Laufzeit des inputabhängigen Setups und des zu testenden Codes, sowie mit $T_{Checkpoint}$ und $T_{Restore}$ die benötigte Zeit für eine Checkpointing- beziehungsweise Restoreoperation. 
 Für die die Laufzeit eines normalen, nicht-C/R Fuzzers bei $n$ benötigten Operationen ergibt sich
@@ -271,9 +271,9 @@ Für große $n$ und $T_{Restore} < T_{Setup}$ ergibt sich hier nun also eine Zei
 $T_{Setup}$ ist dabei natürlich vom jeweilig zu testenden Programm abhängig, $T_{Restore}$ von mehreren Faktoren, unter anderem dem Programm selbst, insbesondere der Größe im Speicher und den zu checkpointenden Features wie Netzwerksockets, und natürlich dem genutzten Checkpoint/Restore-Tool. Eine genauere Betrachtung der Einflüsse dieser Faktoren findet in Kapitel 5.5 statt.
 
 \subsection{Non-C/R-Fuzzer mit C/R-Ansätzen}
-Ein anderer Ansatz zur Kombination von Fuzzing mit Checkpoint/Restore-Mechanismen ist es, statt des impliziten Checkpointing durch den Fuzzer eplizites Checkpointing und Restoring im Fuzztarget vorzunehmen.
+Ein anderer Ansatz zur Kombination von Fuzzing mit Checkpoint/Restore-Mechanismen ist es, statt des impliziten Checkpointing durch den Fuzzer eplizites Checkpointing und Restoring im Fuzz-Target vorzunehmen.
 Dies hat den Vorteil einer größeren Flexibilität im Einsatz und benötigt im Idealfall keine Änderungen am Fuzzer. Dieser Ansatz könnte also unter Umständen mit bereits verfügbaren Fuzzern genutzt werden.\footnote{Eine Diskussion dieser Umstände und der tatsächlichen Anwendbarkeit findet in Kapitel 6 statt.}\\
-Wir betrachten hier zwei Varianten dieses Ansatzes: zuerst in Kapitel 4.2.1 eine generische, naive Nutzung von Checkpoint/Restore im Fuzztarget eines Non-C/R-Fuzzers mit ähnlichem Ziel und einem ähnlichen Ansatz zu dem oben beschriebenen C/R-Fuzzer.\\
+Wir betrachten hier zwei Varianten dieses Ansatzes: zuerst in Kapitel 4.2.1 eine generische, naive Nutzung von Checkpoint/Restore im Fuzz-Target eines Non-C/R-Fuzzers mit ähnlichem Ziel und einem ähnlichen Ansatz zu dem oben beschriebenen C/R-Fuzzer.\\
 Kapitel 4.2.2 behandelt eine problemspezifische Architektur, die durch Anwendung von Checkpoint/Restore-Methoden versucht, das effiziente Fuzzen von Netzwerkprotokollen als Beispiel für komplexe mehrstufige Programme durch Exploration des Zustandsgraphen zu ermöglichen.
 %Can we make something work with normal Fuzzers? What could it look like? What could we use it for?
 \subsubsection{Naiver Non-C/R-Fuzzer}
@@ -283,7 +283,7 @@ Anders als bei einem C/R-Fuzzer nach Kapitel 4.1 (bei dem diese Information durc
 In der ersten Iteration muss das Setup einmalig ausgeführt und danach gecheckpointed werden; in späteren Iterationen wird das Setup nicht erneut ausgeführt, sondern der Checkpoint wiederhergestellt und die Ausführung, beginnend direkt mit dem zu testenden Code, fortgesetzt.
 Dies kann beispielsweise durch das Setzen von Systemvariablen oder das Erstellen eines Tokens im Dateisystem geschehen - ist die Variable bei einer Ausführung also gesetzt oder existiert der Token, so befindet sich das Fuzz-Target in einer späteren Iteration und überspringt das Setup durch ein Restore.
 Ein solches Fuzz-Target folgt der Struktur aus Listing 5.\footnote{In Kapitel 6 stellen wir prototypische Umsetzungen mit CRIU und afl/libFuzzer dar.}
-\begin{lstlisting}[caption=Struktur C/R-Fuzztarget für Non-C/R-Fuzzer]
+\begin{lstlisting}[caption=Struktur C/R-Fuzz-Target für Non-C/R-Fuzzer]
 Falls der Token existiert:
     Restore
 Sonst:
@@ -304,13 +304,13 @@ Hierbei sind folgende Punkte zu beachten:
     \item Fuzzing setzt im Allgemeinen parallele Ausführungen des selben Fuzz-Targets zur Effizienzsteigerung ein. 
         Dies ist im beschriebenen Ansatz nicht ohne weiteres möglich, da mehrere, gleichzeitige Restores der selben Instanz zu konkurriendem Zugriff auf Ressourcen wie PID, Input und Netzwerkressourcen führen würden. Dies würde typischerweise ein erfolgreiches und korrektes Restoring verhindern. 
         Ohne Änderung der Fuzzing-Engine könnte eine Parallelisierung nur erfolgen, indem die Fuzzing-Engine mehrfach instanziert wird und das Fuzz-Target hierbei für jede Instanz andere Werte für Token, den Imagepfad, etc. kennt.
-    \item Der Mechanismus zur Übergabe des Inputs an das Fuzz-Target muss bestimmten Anforderungen entsprechen (dies kann je nach Fuzzer ein Problem darstellen, da diese zumeist den Input entweder beim Aufruf des Fuzztargets als Argument oder durch einen FD wie \texttt{stdin} übergeben - beides Ressourcen, auf die der wiederhergestellte, eigentlich zu testende Prozess keinen Zugriff hat). Hierfür existieren zwei Strategien:
+    \item Der Mechanismus zur Übergabe des Inputs an das Fuzz-Target muss bestimmten Anforderungen entsprechen (dies kann je nach Fuzzer ein Problem darstellen, da diese zumeist den Input entweder beim Aufruf des Fuzz-Targets als Argument oder durch einen FD wie \texttt{stdin} übergeben - beides Ressourcen, auf die der wiederhergestellte, eigentlich zu testende Prozess keinen Zugriff hat). Hierfür existieren zwei Strategien:
         \begin{itemize}
             \item Der restorete Prozess holt sich den Input direkt von der Fuzzing-Engine, beispielsweise indem die Fuzzing-Engine die Inputs in einer FIFO bereitstellt. Jeder restorete Prozess, in jeder Iteration, entnimmt seinen Input und führt mit ihm den Test aus.
             \item Der restorende Prozess speichert vor dem Restore den erhaltenen Input in einer Art und Weise ab, dass der restorete Prozess diesen Input auslesen kann, beispielsweise durch eine Zwischenspeicherung in einer Datei. Eine Adaption von Listing 5 an diese Strategie ist in Listing 6 dargestellt.
         \end{itemize}
 \end{itemize}
-\begin{lstlisting}[caption=Struktur C/R-Fuzztarget für Non-C/R-Fuzzer mit Zwischenspeicherung des Inputs]
+\begin{lstlisting}[caption=Struktur C/R-Fuzz-Target für Non-C/R-Fuzzer mit Zwischenspeicherung des Inputs]
 Hole den Input von Fuzzing-Engine
 Schreibe den Input in eine Datei
 Falls der Token existiert:
@@ -326,7 +326,8 @@ Ebenso wie der oben beschriebene C/R-Fuzzer versucht dieser Ansatz nur das Setup
 \begin{equation}
     T_{Non-C/R} = n (T_{Setup} + T_{Execution})
 \end{equation}
-$T_{C/R}$ ist etwas komplizierter, da das Fuzztarget hier einige der C/R-Fuzzer-Funktionalitäten ad-hoc implementieren muss, es ergibt sich zunächst:
+$T_{C/R}$ ist etwas komplizierter, da das Fuzz-Target hier einige der C/R-Fuzzer-Funktionalitäten ad-hoc implementieren muss, es ergibt sich zunächst:
+
 \begin{equation}
     \begin{split}
         T_{C/R}(n) =\ &1 (T_{Tokencheck} + T_{Setup} + T_{Tokenset} + T_{Checkpoint} + T_{Input} + T_{Execute}) \\
@@ -349,16 +350,16 @@ Auch hier ergibt sich, analog zu Gleichung (3) die Laufzeitverbesserung je Itera
 Die bisher beschriebenen Ansätze bieten nur sehr naive Ansätze zur Lösung nur eines der beschriebenen Fuzzingprobleme - Reduktion des Laufzeitoverheads durch wiederholte Ausführung des Setups in einstufigen, simplen Anwendungen. 
 In diesem Kapitel beschreiben wir einen Ansatz zum Testen einer der Seiten in komplexen, insbesondere mehrstufigen, interaktiven Client-Server-Anwendungen. 
 Hierbei wird durch die Fuzzing-Inputs Schritt für Schritt ein Zustandsgraph beispielsweise des Servers aufgebaut, parallel dazu werden bereits diese Zustände jeweils mit den Inputs auf problematisches, unerwünschtes Verhalten getestet. 
-Zur besseren Lesbarkeit werden wir in diesem Kapitel davon ausgehen, dass ein Server gefuzzt werden soll und das Fuzztarget die Client-Aufgaben übernimmt, dies lässt sich natürlich auch umkehren.\\
-Das Fuzztarget übernimmt dabei in diesem Ansatz mehrere Aufgaben:
+Zur besseren Lesbarkeit werden wir in diesem Kapitel davon ausgehen, dass ein Server gefuzzt werden soll und das Fuzz-Target die Client-Aufgaben übernimmt, dies lässt sich natürlich auch umkehren.\\
+Das Fuzz-Target übernimmt dabei in diesem Ansatz mehrere Aufgaben:
 \begin{itemize}
-    \item Client-Server-Interaktion: Das Fuzztarget implementiert nicht einen wirklichen Client, der das erwünschte Protokoll spricht, sondern simuliert nur einen solchen Client, indem es die von der Fuzzing-Engine generierten Inputs als Client-Input an den Server übergibt, beispielsweise über eine bereits etablierte TCP-Verbindung zu dem Server.
-    \item Verwaltung des Servers: Das Fuzztarget hält in persistenter Form, beispielsweise durch Schreiben ins Dateisystem, den bisher gefundenen Zustandsgraphen des Servers vor, also die gefundenen Zustände und die Inputs, die zu Übergängen zwischen diesen führen. 
+    \item Client-Server-Interaktion: Das Fuzz-Target implementiert nicht einen wirklichen Client, der das erwünschte Protokoll spricht, sondern simuliert nur einen solchen Client, indem es die von der Fuzzing-Engine generierten Inputs als Client-Input an den Server übergibt, beispielsweise über eine bereits etablierte TCP-Verbindung zu dem Server.
+    \item Verwaltung des Servers: Das Fuzz-Target hält in persistenter Form, beispielsweise durch Schreiben ins Dateisystem, den bisher gefundenen Zustandsgraphen des Servers vor, also die gefundenen Zustände und die Inputs, die zu Übergängen zwischen diesen führen. 
         Zusätzlich wird jeder Zustand, wenn er das erste Mal erreicht wird, gecheckpointet und das entsprechende Image mit dem Zustand verknüpft, das heißt das Fuzz-Target muss auch erkennen wenn einer neuer Zustand erreicht wird.
 \end{itemize}
 Neu generierte Inputs werden dabei hintereinander auf alle bekannten Zustände angewendet, der Zustandsgraph wird um neu gefundene Kanten und neue Zustände erweitert.\\
 Listing 7 implementiert ein solches Fuzz-Target in Pseudocode.
-\begin{lstlisting}[mathescape, caption=Fuzztarget zur Exploration des Zustandsgraphen]
+\begin{lstlisting}[mathescape, caption=Fuzz-Target zur Exploration des Zustandsgraphen]
 if token not set:
     server.start()
     connection := connectTo(server)
@@ -391,7 +392,8 @@ Hierbei kann es sich bei \texttt{connection} um eine beliebige Verbindungsart zw
 Zusätzlich muss sich der Server darüber bewusst sein, in welchem Zustand er sich gerade befindet, und dies dem Fuzz-Target/Client mitteilen können (siehe: \texttt{state\_id := server.state} etc.), beispielsweise durch Einfügen entsprechender Funktionalität in den Servercode und die Übergabe durch einen entsprechenden IPC-Ansatz.\\
 Abbildung 1 zeigt die Zustandsübergangsexploration: Es liegt ein Server vor mit bereits bekannten Zuständen $s_0, s_1, s_2, s_3$ und den Zustandsübergängen für die Inputs $i_1, \dots, i_4$. Für einen neuen Input $i*$ wird nun jeder der Zustände $s_0, \dots, s_3$ einmal wiederhergestellt und mit $i*$ getestet. Falls Zustand $s_i$ mit Input $i*$ einen neuen Zustand erzeugt, wird dieser gecheckpointed und als Knoten $s_4$ mit der Kante $(s_i, s_4, i*)$ dem Graphen hinzugefügt.
 
-\begin{figure}
+\begin{figure}[h]
+    \begin{center}
 \begin{tikzpicture}[->,>=stealth',shorten >=1pt,auto,node distance=2.8cm,
                     semithick]
   \tikzstyle{every state}=[fill=lightgray,draw=none,text=black]
@@ -414,6 +416,7 @@ Abbildung 1 zeigt die Zustandsübergangsexploration: Es liegt ein Server vor mit
         (C) edge [bend right, dotted] node {$i*$}  (H)
         (D) edge [bend left, dotted] node {$i*$}  (G);
 \end{tikzpicture}
+    \end{center}
     \caption{Zustandsübergangsexploration mit Input $i*$}
 \end{figure}
 
@@ -425,9 +428,9 @@ Bei Fragestellungen, bei denen eine sinnvolle Definition des States möglich ist
 Nachteile dieses Ansatzes sind:
 \begin{itemize}
     \item White-Box-Fuzzing beziehungsweise klassisches Gray-Box-Fuzzing durch Code-Coverage werden, wie schon Ansätzen in Kapitel 4.1 und 4.2.1, durch die permanente Variation des tatsächlich ausgeführten Codes erschwert beziehungsweise könnten in bisherigen Fuzzern tatsächlich gar nicht nutzbar sein, da der eigentlich ausgeführte Code, der Client, gar nicht der Code ist, den wir Fuzzen wollen - dies wäre der Server. 
-        Stattdessen stellt diese Art des Fuzzings jedoch eine eigene Art des Gray-Box-Fuzzings dar, da das Fuzztargets nach und nach die Struktur des Servers, wenn auch auf einem höheren Level als klassische Code-Coverage, herausarbeitet und darüber versucht, das Fuzzing zu optimieren.
+        Stattdessen stellt diese Art des Fuzzings jedoch eine eigene Art des Gray-Box-Fuzzings dar, da das Fuzz-Targets nach und nach die Struktur des Servers, wenn auch auf einem höheren Level als klassische Code-Coverage, herausarbeitet und darüber versucht, das Fuzzing zu optimieren.
     \item Selbst wenn Code-Coverage-Messungen möglich sind, so ist ihre Effektivität doch dadurch abgeschwächt, dass diese Inputs auf alle Zustände angewendet werden, nicht nur auf diejenigen Zustände, bei denen sie ob der Code-Coverage ausgewählt wurden. 
-    \item Ebenso wie bei der naiven C/R-Implemetierung im Fuzztarget muss der Fuzzer auch hier mit Multiprocess-Anwendung umgehen können, insbesondere den Server - als vom Fuzztarget gestartetes, eigenständiges Programm - in die Suche nach problematischem Verhalten einbeziehen.
+    \item Ebenso wie bei der naiven C/R-Implemetierung im Fuzz-Target muss der Fuzzer auch hier mit Multiprocess-Anwendung umgehen können, insbesondere den Server - als vom Fuzz-Target gestartetes, eigenständiges Programm - in die Suche nach problematischem Verhalten einbeziehen.
     \item Das Formulieren von Regeln, Dictionaries, \dots für die Inputs eines Smart-Fuzzers wird dadurch verkompliziert, dass diese Regeln nun nicht nur für einen Pfad oder eine bestimmte Funktion gelten sollen, sondern für das ganze zu testende Programm. 
         Dies kann unter Umständen zu einer Vergrößerung des Suchraums oder sogar der nicht-Nutzbarkeit von Smart-Fuzzern führen, was wiederum Performanceverluste bedeutet.
     \item In Fällen, in denen es nur wenige gültige Übergänge auf einen Zustand mit hoher Distanz vom Ausgangsknoten gibt, kann es passieren, dass die Inputs bereits untersucht wurden oder als wenig vielversprechend von der Fuzzing-Engine verworfen wurden. Um dies zu vermeiden, sollte die Optimierung der Inputs, wenn überhaupt möglich, nicht zu zielgerichtet erfolgen.
@@ -455,7 +458,6 @@ CRIU findet unter anderem Anwendung in einigen prominenten Container-Anwendungen
 %CRIU is probably the only C/R tools that could make sense right now, two reasons why: 1. It's actually still getting updates and is actually easily useable on modern systems unlike many of the other things 2. It's capabilities exceed any other modern C/R tool
 \subsection{Nutzung}
 CRIU kann auf zwei Arten genutzten werden:
-%TODO RPC details
 \begin{itemize}
     \item Über CRIU-spezifische RPC-Aufrufe (Remote Procedure Call). Dies erfolgt entweder durch das CLI oder eine Programmiersprachen-API, insbesondere die C-API.
     \item Über das Command Line Interface ohne RPC beziehungsweise ohne CRIU Service.
@@ -559,8 +561,8 @@ Da natürlich auch externe Einflüsse wie Hardware, Auslastung des Systems, \dot
 % 100
 % 500
 % T_Restore
-\begin{center}
 \begin{figure}
+\begin{center}
 \begin{tabular}{| l | l  l  l  l  l | l |}
     \toprule
     Iterationen & $1$byte & $10^2$byte & $10^4$byte & $10^6$byte & $10^8$byte & TCP \\
@@ -573,15 +575,15 @@ Da natürlich auch externe Einflüsse wie Hardware, Auslastung des Systems, \dot
     $T_{Restore}$ & 0.024s & 0.024s & 0.024s & 0.025s & 0.043s & 0.091s \\
     \bottomrule
 \end{tabular}
-    \caption{Performancemessung} % TODO: Better name
-\end{figure}
 \end{center}
+    \caption{Performancemessung}
+\end{figure}
 
-Abbildung 2 zeigt die Ergebnisse unserer Performancemessung in Hinsicht auf Laufzeit eines Launchers, der Anwendungen startet, checkpointet, und diese wiederholt wiederherstellt, sobald die Anwendung terminiert. Diese Messung fand auf einem Lenovo Thinkpad X230 statt, die Laufzeiten sind das arithmetische Mittel jeweils mehrerer Messungen, für die gesamten Ergebnisse siehe Anhang [TODO].
+Abbildung 2 zeigt die Ergebnisse unserer Performancemessung in Hinsicht auf Laufzeit eines Launchers, der Anwendungen startet, checkpointet, und diese wiederholt wiederherstellt, sobald die Anwendung terminiert. Diese Messung fand auf einem Lenovo Thinkpad X230 statt, die Laufzeiten sind das arithmetische Mittel jeweils mehrerer Messungen, für die gesamten Ergebnisse siehe Anhang 1, Abbildungen 3 bis 8.
 Die Anwendungen sind dabei
 \begin{enumerate}
-    \item Eine einzelne Anwendung, die eine bestimmte Anzahl Bytes zufälliger Daten liest, sich selbst checkpointed, eine sehr simple Operation auf den Daten ausführt, und das Ergebnis auf \texttt{stdout} ausgibt (TODO: Anhang)
-    \item Ein Client-Server-Paar, welches eine TCP-Verbindung aufbaut, sich selbst checkpointet sich gegenseitig jeweils ein kurzes Datenpaket zusendet und dabei Informationen über den Zustand auf \texttt{stdout} ausgeben (TODO: Code im Anhang)
+    \item Eine einzelne Anwendung, die eine bestimmte Anzahl Bytes zufälliger Daten liest, sich selbst checkpointed, eine sehr simple Operation auf den Daten ausführt, und das Ergebnis auf \texttt{stdout} ausgibt, siehe Anhang 1, Listings 13 bis 15.
+    \item Ein Client-Server-Paar, welches eine TCP-Verbindung aufbaut, sich selbst checkpointet sich gegenseitig jeweils ein kurzes Datenpaket zusendet und dabei Informationen über den Zustand auf \texttt{stdout} ausgeben, siehe Anhang 1, Listings 16 bis 19.
 \end{enumerate}
 Dabei setzen sich die Zeitmessungen über $n$ Iterationen $T(n)$ wie in Gleichung 7 zusammen. 
 Durch die Kombination von Messungen mit verschiedenen Iterationen, siehe Gleichung 8, lässt sich dies dann als lineares Gleichungssystem formulieren und sowohl $T_1$ (Ausführung bis inklusive Checkpointing) als auch $T_2$ (iteriertes Restore und Execute) abschätzen. \\
@@ -597,17 +599,17 @@ $T_{Execute}$ wurde aus dem Programm heraus als deutlich unter $1{ms}$ gemessen,
     \end{split}
 \end{equation}
 Hiermit erkennt man aus Abbildung 2, dass die "Grundkosten" bei CRIU für einen einzelnen Restore bei ca. $24ms$ für ein triviales Fuzz-Target liegen würden, bei höherem Speicherverbrauch oder komplexeren Anwendungen wie einem Client-Server-Paar kann dies leicht auf $90ms$ oder mehr steigen. 
-Mit individuell gemessenen Setup-Zeiten von maximal $10{ms}$ ist zu erkennen, dass mit CRIU in den betrachteten Anwendungsszenarien gemäß Gleichung 3 in Kapitel 4.1 keine Laufzeitersparnis sondern sogar ein signifikanter Laufzeitverlust erzielt würde.\\ %TODO
+Mit individuell gemessenen Setup-Zeiten von maximal $10{ms}$ ist zu erkennen, dass mit CRIU in den betrachteten Anwendungsszenarien gemäß Gleichung 3 in Kapitel 4.1 keine Laufzeitersparnis sondern sogar ein signifikanter Laufzeitverlust erzielt würde.\\
 Ähnliche Untersuchungen simpler, insbesondere nicht vernetzter, Anwendungen mit Linux-CR\cite{linuxcr} erreichten auf älterer Hardware Restore-Zeiten von $\leq 1{ms}$. 
 Wir vermuten, dass diese Diskrepanz auf die verschiedenen Ansätze zum Restoring zurückzuführen ist, insbesondere benötigt Linux-CR nicht die Injektion der Blobs durch \texttt{ptrace} und den damit verbundenen Overhead, da Linux-CR direkt mit Kernel-Ressourcen arbeiten kann. 
 Insbesondere heißt dies aber, dass auch wenn verfügbare mächtige C/R-Tools recht lange Checkpoint- und Restore-Zeiten beobachten lassen, es noch Optimierungspotential in dieser Richtung gibt.
 Wir können bei einer generellen Bewertung der Möglichkeiten von C/R-Fuzzing also noch mit einer Verbesserung dieser Werte rechnen, wenn entsprechende Entwicklungsanstrengungen unternommen werden.
 
 \section{C/R-Fuzzing: Implementierung}
-Dieses Kapitel untersucht die Nutzbarkeit der in Kapitel 2.4 und 2.5 vorgestellten Fuzzing-Engines für C/R-Fuzzing mit C/R-Tools am Beispiel von CRIU nach dem in Kapitel 4.2.1 vorgestellten Ansatz. %TODO: Vorwärtsverweis?
+Dieses Kapitel untersucht die Nutzbarkeit der in Kapitel 2.4 und 2.5 vorgestellten Fuzzing-Engines für C/R-Fuzzing mit C/R-Tools am Beispiel von CRIU nach dem in Kapitel 4.2.1 vorgestellten Ansatz.
 
-\subsection{libFuzzer} %TODO libFuzzer!
-Um die Nutzbarkeit libFuzzers für C/R-Fuzzing zu testen, implementierten wir ein beispielhaftes Fuzz-Target wie in Kapitel 4.2.1, Listing 6, siehe Anhang [TODO].
+\subsection{libFuzzer}
+Um die Nutzbarkeit libFuzzers für C/R-Fuzzing zu testen, implementierten wir ein beispielhaftes Fuzz-Target wie in Kapitel 4.2.1, Listing 6, siehe Anhang 2.
 Das Zwischenspeichern des Inputs ist zwingend notwendig, da libFuzzer den Input immer als Argument beim Aufruf übergibt. 
 Eine erfolgreiche Ausführung wurde unter anderem durch folgende Probleme verhindert:
 \begin{itemize}
@@ -632,7 +634,7 @@ Eine erfolgreiche Ausführung wurde unter anderem durch folgende Probleme verhin
 \end{lstlisting}
 Selbst wenn diese Probleme gelöst werden sollten, wäre eine Nutzbarkeit libFuzzers für C/R-Fuzzing (sowohl mit CRIU als auch anderen verfügbaren C/R-Systemen) schwer vorstellbar: libFuzzer kann zwar mit Multi-Threaded, aber nicht notwendiger korrekt mit Multi-Prozess-Anwendungen betrieben werden. Eine allgemeine Nutzbarkeit, unabhängig von den zu testenden Programmen, ist unwahrscheinlich.
 \subsection{afl}
-Ebenso wie bei der Untersuchung libFuzzers implementierten wir für den afl-Test ein simples C/R-Fuzz-Target wie in Kapitel 4.2.1 beschrieben, siehe Anhang [TODO].\\
+Ebenso wie bei der Untersuchung libFuzzers implementierten wir für den afl-Test ein simples C/R-Fuzz-Target wie in Kapitel 4.2.1 beschrieben, siehe Anhang 3.\\
 Hier verhindert ein architekturelles Problem eine erfolgreiche Ausführung:
 Durch die Fork-Server-Optimierung in AFL wie in Kapitel 2.5 beschrieben teilt sich jede Fuzz-Target-Ausführung als Prozess Memory Areas mit dem initialen Stopped Process Image. 
 Wenn die Fuzz-Target-Ausführung CRIU-initiiert das Checkpointing ausführen soll scheitert dies, da CRIU Shared Memory Nutzung über SysVIPC entdeckt (zu einem nicht zu dumpenden Prozess) und deswegen das Checkpointing abbricht, siehe Listing 12.
@@ -673,24 +675,8 @@ Eine denkbare Alternative wäre Proto-Checkpointing im Stile des afl-Fork-Server
 
 Auch wenn die beschriebenen Erweiterungen von Fuzzing-Engines einen nennenswerten Engineering-Aufwand bedeuten werden (\cite{aflrestore} stellt deutlich einige der Herausforderungen im Umgang mit Prozessen in Unix/Linux dar), ist in Anbetracht der Bedeutung der Sicherheit von IT-Systemen und den bereits erzielten Erfolgen durch Fuzzing damit zu rechnen, dass der Bedarf an Fuzzing-Engines für komplexere oder speziellere Problemklassen erkannt und mit weiterer Verfolgung des Fuzzing-Ansatz befriedigt werden wird.
 
+\newpage
 
-\section*{Anhang}
-\subsection*{Performancemessungen mit CRIU}
-%\begin{figure}
-%\begin{tabular}
-%
-%\end{tabular}
-
-%it\mem  1                                       100                                     10.000                                  1.000.000                               100.000.000
-%10      0.303|0.285|0.282|0.295|0.296           0.266|0.305|0.286|0.293|0.299           0.283|0.311|0.292|0.291|0.283           0.284|0.304|0.301|0.297|0.318           0.633|0.615|0.606|0.639|0.620
-%50      1.293|1.268|1.266|1.267|1.253           1.260|1.262|1.291|1.257|1.275           1.243|1.249|1.260|1.241|1.288           1.309|1.309|1.298|1.293|1.283           2.360|2.302|2.335|2.342|2.327
-%100     2.468|2.504|2.388|2.481|2.456           2.483|2.488|2.520|2.529|2.449           2.461|2.424|2.506|2.490|2.503           2.606|2.538|2.548|2.526|2.571           4.523|4.483|4.476|4.494|4.434
-%500     12.263|12.270|12.114|12.205|12.171      12.171|12.289|12.246|12.126|12.306      12.307|12.245|12.114|12.278|12.306      12.578|12.712|12.617|12.602|12.729      21.709|21.486|21.810|21.402|21.411
-
-
-\subsection*{libFuzzer Fuzz-Target}
-\subsection*{afl Fuzz-Target}
-TODO
 
 \nocite{*}
 
@@ -765,7 +751,661 @@ TODO
         2014. \path{https://lcamtuf.blogspot.com/2014/10/fuzzing-binaries-without-execve.html}
 \end{thebibliography}
 
-\end{document}
+\newpage
 
-% TODO: Parallel Fuzzing?
-% TODO: TCP TTL?
+\section*{Anhang 1: Performancemessungen mit CRIU}
+
+Sämtlicher Code und die Messergebnisse sind auch unter \path{https://github.com/malteklaassen/bachelor/tree/master/timing-testing} zu finden.
+
+\begin{figure}[ht]
+    \begin{center}
+    \begin{tabular}{| l | l l l l l |}
+        \toprule
+        Iterationen & \multicolumn{5}{l |}{Messungen} \\
+        \midrule
+        10 & 0.303 & 0.285 & 0.282 & 0.295 & 0.296\\
+        50 & 1.293 & 1.268 & 1.266 & 1.267 & 1.253\\
+        100 & 2.468 & 2.504 & 2.388 & 2.481 & 2.456 \\    
+        500 & 12.263 & 12.270 & 12.114 & 12.205 & 12.171\\
+        \bottomrule
+
+    \end{tabular}
+    \end{center}
+    \caption{Ergebnisse: Kein TCP, $1$byte}
+\end{figure}
+
+\begin{figure}[ht]
+    \begin{center}
+    \begin{tabular}{| l | l l l l l |}
+        \toprule
+        Iterationen & \multicolumn{5}{l |}{Messungen} \\
+        \midrule
+        10 & 0.266 & 0.305 & 0.286 & 0.293 & 0.299 \\
+        50 & 1.260 & 1.262 & 1.291 & 1.257 & 1.275 \\
+        100 & 2.483 & 2.488 & 2.520 & 2.529 & 2.449 \\
+        500 & 12.171 & 12.289 & 12.246 & 12.126 & 12.306 \\
+        \bottomrule
+
+    \end{tabular}
+    \end{center}
+    \caption{Ergebnisse: Kein TCP, $10^2$byte}
+\end{figure}
+
+\begin{figure}[ht]
+    \begin{center}
+    \begin{tabular}{| l | l l l l l |}
+        \toprule
+        Iterationen & \multicolumn{5}{l |}{Messungen} \\
+        \midrule
+        10 & 0.283 & 0.311 & 0.292 & 0.291 & 0.283 \\
+        50 & 1.243 & 1.249 & 1.260 & 1.241 & 1.288 \\
+        100 & 2.461 & 2.424 & 2.506 & 2.490 & 2.503 \\
+        500 & 12.307 & 12.245 & 12.114 & 12.278 & 12.306 \\
+        \bottomrule
+
+    \end{tabular}
+    \end{center}
+    \caption{Ergebnisse: Kein TCP, $10^4$byte}
+\end{figure}
+
+
+\begin{figure}[ht]
+    \begin{center}
+    \begin{tabular}{| l | l l l l l |}
+        \toprule
+        Iterationen & \multicolumn{5}{l |}{Messungen} \\
+        \midrule
+        10 & 0.284 & 0.304 & 0.301 & 0.297 & 0.318 \\
+        50 & 1.309 & 1.309 & 1.298 & 1.293 & 1.283 \\
+        100 & 2.606 & 2.538 & 2.548 & 2.526 & 2.571 \\
+        500 & 12.578 & 12.712 & 12.617 & 12.602 & 12.729 \\
+        \bottomrule
+
+    \end{tabular}
+    \end{center}
+    \caption{Ergebnisse: Kein TCP, $10^6$byte}
+\end{figure}
+
+\begin{figure}[ht]
+    \begin{center}
+    \begin{tabular}{| l | l l l l l |}
+        \toprule
+        Iterationen & \multicolumn{5}{l |}{Messungen} \\
+        \midrule
+        10 & 0.633 & 0.615 & 0.606 & 0.639 & 0.620 \\
+        50 & 2.360 & 2.302 & 2.335 & 2.342 & 2.327 \\
+        100 & 4.523 & 4.483 & 4.476 & 4.494 & 4.434 \\
+        500 & 21.709 & 21.486 & 21.810 & 21.402 & 21.411 \\
+        \bottomrule
+
+    \end{tabular}
+    \end{center}
+    \caption{Ergebnisse: Kein TCP, $10^8$byte}
+\end{figure}
+
+\begin{figure}[ht]
+    \begin{center}
+    \begin{tabular}{| l | l l l l l |}
+        \toprule
+        Iterationen & \multicolumn{5}{l |}{Messungen} \\
+        \midrule
+        10 & 0.982 & 0.979 & 0.988 & 0.970 & 0.992 \\
+        50 & 4.596 & 4.600 & 4.602 & 4.621 & 4.656 \\
+        100 & 9.196 & 9.151 & 9.188 & 9.133 & 9.183 \\
+        500 & 45.412 & 45.631 & 45.537 & 45.581 & 45.546 \\
+        \bottomrule
+
+    \end{tabular}
+    \end{center}
+    \caption{Ergebnisse: TCP}
+\end{figure}
+
+\clearpage
+\begin{lstlisting}[caption=Ohne TCP: Launcher,language=C]
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+// First argument: memory to be used
+// Second argument: number of iterations
+
+int main(int argc, char* argv[]){
+    //fork, start & dump the processes
+    int clientpid;
+
+    clientpid = fork();
+    if ( clientpid == 0 ){
+        char clientcall[100];
+        sprintf(clientcall, "./client %s", argv[1]);
+        system(clientcall);
+        exit(0);
+    }
+
+    // wait for the processes to get saved
+    waitpid(clientpid, NULL, 0);
+
+    int iterations = atoi(argv[2]);
+    // restore #ITERATIONS times
+    for(int i = 0; i < iterations; i++){
+        printf("Iteration: %i\n", i);
+        clientpid = 0;
+
+        clientpid = fork();
+        if ( clientpid == 0 ){
+            //restore the client
+            system("criu restore --shell-job --images-dir /tmp/criu/client");
+            exit(0);
+        }
+
+        // wait for them to terminate
+        waitpid(clientpid, NULL, 0);
+    }
+}
+\end{lstlisting}
+
+\begin{lstlisting}[caption=Ohne TCP: Client,language=C]
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <criu/criu.h>
+
+int SERVER_PORT;
+
+int main(int argc, char* argv[]){
+    criu_init_opts();
+
+    char s[100] = "Yello World.\n";
+    char* s2 = malloc(atoi(argv[1]));
+
+    int urand = open("/dev/urandom", O_RDONLY);
+    read(urand, s2, atoi(argv[1]));
+    close(urand);
+
+
+    int dir = open("/tmp/criu/client/", O_DIRECTORY);
+    criu_set_tcp_established(true);
+    criu_set_images_dir_fd(dir);
+    criu_set_shell_job(true);
+    criu_set_log_file("client.log");
+//    criu_set_log_level(4);
+
+    criu_dump();
+
+    s[0] = 'H';
+    printf("%s", s);
+    printf("%d\n", s2!=NULL?strlen(s2):-1);
+
+    return 0;
+}
+\end{lstlisting}
+
+
+\begin{lstlisting}[caption=Ohne TCP: Makefile,language=make]
+CC = clang
+CFLAGS = -Wall --pedantic
+LDFLAGS = -lcriu
+
+.PHONY: all
+all: client launcher
+
+client: client.o
+client.o: client.c
+launcher: launcher.o
+launcher.o: launcher.c
+
+.PHONY: prep
+prep:
+	mkdir -p /tmp/criu/client
+
+.PHONY: clean
+clean:
+	rm -rf *.o
+\end{lstlisting}
+\clearpage
+\newpage
+
+\begin{lstlisting}[caption=Mit TCP: Launcher,language=C]
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+// First argument: port
+// Second argument: number of iterations
+
+int main(int argc, char* argv[]){
+    //fork, start & dump the processes
+    int serverpid, clientpid;
+
+    serverpid = fork();
+    if ( serverpid == 0 ){
+        char servercall[100];
+        sprintf(servercall, "./server %s", argv[1]);
+        system(servercall);
+        exit(0);
+    }
+
+    clientpid = fork();
+    if ( clientpid == 0 ){
+        char clientcall[100];
+        sprintf(clientcall, "./client %s", argv[1]);
+        system(clientcall);
+        exit(0);
+    }
+
+    // wait for the processes to get saved
+    waitpid(serverpid, NULL, 0);
+    waitpid(clientpid, NULL, 0);
+
+
+    // determine the server- & clientport for the netfilter rules (they are written to a file by the server and client before the dump)
+    int clientport, serverport;
+
+    FILE* portfp = fopen("/tmp/criu/clientport", "r");
+    fscanf(portfp, "%i", &clientport);
+    fclose(portfp);
+
+    portfp = fopen("/tmp/criu/serverport", "r");
+    fscanf(portfp, "%i", &serverport);
+    fclose(portfp);
+
+    // create the netfilter rules & iptables calls
+
+    char iptables1[200], iptables2[200], iptables3[200], iptables4[200];
+    sprintf(iptables1, "iptables -A OUTPUT -s 127.0.0.1/32 -d 127.0.0.1/32 -p tcp -m mark ! --mark 0xc114 -m tcp --sport %i --dport %i -j DROP", clientport, serverport);
+    sprintf(iptables2, "iptables -A OUTPUT -s 127.0.0.1/32 -d 127.0.0.1/32 -p tcp -m mark ! --mark 0xc114 -m tcp --sport %i --dport %i -j DROP", serverport, clientport);
+    sprintf(iptables3, "iptables -A INPUT -s 127.0.0.1/32 -d 127.0.0.1/32 -p tcp -m mark ! --mark 0xc114 -m tcp --sport %i --dport %i -j DROP", clientport, serverport);
+    sprintf(iptables4, "iptables -A INPUT -s 127.0.0.1/32 -d 127.0.0.1/32 -p tcp -m mark ! --mark 0xc114 -m tcp --sport %i --dport %i -j DROP", serverport, clientport);
+
+
+    int iterations = atoi(argv[2]);
+    // restore #ITERATIONS times
+    for(int i = 0; i < iterations; i++){
+        printf("Iteration: %i\n", i);
+        serverpid = 0, clientpid = 0;
+
+        serverpid = fork();
+        if ( serverpid == 0 ){
+            //restore the server
+            system("criu restore --tcp-established --shell-job --images-dir /tmp/criu/server");
+            exit(0);
+        }
+
+        clientpid = fork();
+        if ( clientpid == 0 ){
+            //restore the client
+            system("criu restore --tcp-established --shell-job --images-dir /tmp/criu/client");
+            exit(0);
+        }
+
+        // wait for them to terminate
+        waitpid(serverpid, NULL, 0);
+        waitpid(clientpid, NULL, 0);
+
+        //add the netfilter rules
+        system(iptables1);
+        system(iptables2);
+        system(iptables3);
+        system(iptables4);
+    }
+}
+
+\end{lstlisting}
+
+\begin{lstlisting}[caption=Mit TCP: Server,language=C]
+#include <errno.h>
+#include <string.h>
+#include <unistd.h>
+#include <netdb.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <time.h>
+#include <stdlib.h>
+
+#include <criu/criu.h>
+
+int SERVER_PORT;
+
+int main(int argc, char* argv[]){
+    criu_init_opts();
+
+    SERVER_PORT = atoi(argv[1]);
+
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+
+    server_addr.sin_port = htons(SERVER_PORT);
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    int listen_sock;
+    if ( (listen_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        printf("Server: Could not create listen socket.\n");
+        return 1;
+    }
+
+    if ( (bind(listen_sock, (struct sockaddr *)&server_addr, sizeof(server_addr))) < 0 ) {
+        printf("Server: Could not bind listen socket.\n");
+        return 1;
+    }
+
+    int wait_size = 1;
+
+    if ( listen(listen_sock, wait_size) < 0 ) {
+        printf("Server: Could not open socket for listening.\n");
+        return 1;
+    }
+
+    struct sockaddr_in client_addr;
+    unsigned client_addr_len = 0;
+
+    //while ( 1 ) {
+        int sock;
+        if ( ( sock = accept(listen_sock, (struct sockaddr*) &client_addr, &client_addr_len)) < 0 ) {
+            printf("Server: Could not open accept socket.\n");
+            return 1;
+        }
+
+        printf("Server: Client connected with addr %s.\n", inet_ntoa(client_addr.sin_addr));
+
+        int dir = open("/tmp/criu/server/", O_DIRECTORY);
+        criu_set_tcp_established(true);
+        criu_set_images_dir_fd(dir);
+        criu_set_shell_job(true);
+        criu_set_log_file("server.log");
+        //criu_set_log_level(4);
+
+        criu_dump();
+
+        printf("Server: ...restored.\n");
+
+
+        char buffer[4096];
+        int n;
+
+        printf("Server: Recving data...\n");
+        n = recv(sock, buffer, 4096, 0);
+        printf("Server:  ...data recved\n");
+
+        if ( n < 0 ) {
+            printf("Server: Could not read data from socket.\n");
+            return 1;
+        } else if ( n == 0 ) {
+            printf("Server: EOF.\n");
+        } else {
+            memset(buffer, 0, 4096);
+            snprintf(buffer, 4096, "%ld", time(NULL));
+            printf("Server: Sending data...\n");
+            send(sock, buffer, n, 0);
+            printf("Server:  ...data sent.\n");
+        }
+
+        close(sock);
+
+    //}
+
+    close(listen_sock);
+    return 0;
+}
+
+\end{lstlisting}
+
+\begin{lstlisting}[caption=Mit TCP: Client,language=C]
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <stdlib.h>
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <criu/criu.h>
+
+int SERVER_PORT;
+
+int main(int argc, char* argv[]){
+    criu_init_opts();
+
+    const char * server_name = "localhost";
+    SERVER_PORT = atoi(argv[1]);
+
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+
+    inet_pton(AF_INET, server_name, &server_addr.sin_addr);
+
+    server_addr.sin_port = htons(SERVER_PORT);
+
+    int sock;
+    if ( ( sock = socket(AF_INET, SOCK_STREAM, 0) ) < 0 ) {
+        printf("Client: Could not create socket.\n");
+        return 1;
+    }
+
+    if ( connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0 ) {
+        printf("Client: Could not connect to server.\n");
+        return 1;
+    }
+
+    struct sockaddr_in local_address;
+    unsigned int addr_size = sizeof(local_address);
+    getsockname(sock, (struct sockaddr*)&local_address, &addr_size);
+    FILE* clientportfp = fopen("/tmp/criu/clientport", "w");
+    fprintf(clientportfp, "%i", ntohs(local_address.sin_port));
+    fclose(clientportfp);
+
+    FILE* serverportfp = fopen("/tmp/criu/serverport", "w");
+    fprintf(serverportfp, "%i", ntohs(server_addr.sin_port));
+    fclose(serverportfp);
+
+
+
+
+    int dir = open("/tmp/criu/client/", O_DIRECTORY);
+    criu_set_tcp_established(true);
+    criu_set_images_dir_fd(dir);
+    criu_set_shell_job(true);
+    criu_set_log_file("client.log");
+//    criu_set_log_level(4);
+
+    criu_dump();
+
+    printf("Client: ...restored.\n");
+
+    char buffer[4096] = "This is some data to be send to the server.\n";
+
+    printf("Client: Sending data...\n");
+    send(sock, buffer, strlen(buffer), 0);
+    printf("Client: ... data sent.\n");
+
+    printf("Client: Recving data...\n");
+    int n = recv(sock, buffer, 4096, 0);
+    printf("Client: ... data recved\n");
+    if ( n < 0 ) {
+        printf("Client: Could not read data from socket.\n");
+            return 1;
+    } else if ( n == 0 ) {
+        printf("Client: EOF.\n");
+    } else {
+        write(STDOUT_FILENO, buffer, n);
+	printf("\n");
+    }
+    close(sock);
+    return 0;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[caption=Mit TCP: Makefile,language=Make]
+CC = clang
+CFLAGS = -Wall --pedantic
+LDFLAGS = -lcriu
+
+.PHONY: all
+all: client server launcher
+
+client: client.o
+server: server.o
+server.o: server.c
+client.o: client.c
+launcher: launcher.o
+launcher.o: launcher.c
+
+.PHONY: prep
+prep:
+	mkdir -p /tmp/criu/client
+	mkdir -p /tmp/criu/server
+
+.PHONY: clean
+clean:
+	rm -rf *.o
+
+\end{lstlisting}
+
+\clearpage
+\section*{Anhang 2: libFuzzer Fuzz-Target}
+
+Der Code und die Logs sind auch unter \path{https://github.com/malteklaassen/bachelor/tree/master/fuzzing/libfuzzer} zu finden.
+
+\begin{lstlisting}[caption=libFuzzer Fuzz-Target,language=C]
+#include <criu/criu.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size){
+    criu_init_opts();
+
+    if( access( "/tmp/criu/fuzz/token", F_OK) != 0 ){
+        int dir = open("/tmp/criu/fuzz/", O_DIRECTORY);
+
+        FILE* f = fopen("/tmp/criu/fuzz/token", "w");
+        fclose(f);
+
+        int input = open("/tmp/criu/fuzz/input", O_CREAT | O_WRONLY );
+        FILE* sinput = fopen("/tmp/criu/fuzz/sinput", "w");
+        write(input, Data, Size);
+        fprintf(sinput, "%d\n", Size);
+        fclose(sinput);
+        close(input);
+
+        criu_set_images_dir_fd(dir);
+        criu_set_shell_job(true);
+        criu_set_log_file("client.log");
+        criu_set_log_level(4);
+        criu_set_leave_running(true);
+
+        criu_dump();
+
+        size_t size;
+        uint8_t *data;
+
+        input = open("/tmp/criu/fuzz/input", O_RDONLY);
+        sinput = fopen("/tmp/criu/fuzz/sinput", "r");
+        fscanf(sinput, "%d\n", &size);
+        printf("%d\n", size);
+        data = malloc(size);
+        read(input, data, size);
+        fclose(sinput);
+        close(input);
+
+        printf("Hello World\n");
+        write(STDOUT_FILENO, data, size);
+//        printf("%s\n", Data);
+        return 0;
+    }else{
+        int dir = open("/tmp/criu/fuzz/", O_DIRECTORY);
+
+       int input = open("/tmp/criu/fuzz/input", O_CREAT | O_WRONLY);
+       FILE* sinput = fopen("/tmp/criu/fuzz/sinput", "w");
+       write(input, Data, Size);
+       fprintf(sinput, "%d\n", Size);
+       fclose(sinput);
+       close(input);
+
+        criu_set_images_dir_fd(dir);
+        criu_set_shell_job(true);
+        criu_set_log_file("client.log");
+        criu_set_log_level(4);
+
+        criu_restore_child();
+
+
+    return 0;
+    }
+}
+\end{lstlisting}
+
+\begin{lstlisting}[caption=libFuzzer Makefile,language=Make]
+CC = clang
+CFLAGS = -Wall -g -fsanitize=fuzzer,signed-integer-overflow 
+LDFLAGS = -lcriu
+\end{lstlisting}
+
+
+\section*{Anhang 3: afl Fuzz-Target}
+
+Der Code und die Logs sind auch unter \path{https://github.com/malteklaassen/bachelor/tree/master/fuzzing/afl} zu finden.
+
+\begin{lstlisting}[caption=afl Fuzz-Target,language=C]
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#include <criu/criu.h>
+#include <fcntl.h>
+
+int main(){
+	criu_init_opts();
+	char str[200];
+
+	// if token exists
+	if( access("/tmp/criu/token", F_OK) == 0 ){
+		// restore in place
+		int dir = open("/tmp/criu/afl/", O_DIRECTORY);
+		criu_set_images_dir_fd(dir);
+		criu_set_shell_job(true);
+		criu_set_log_file("fuzz.log");
+		criu_set_log_level(4);
+
+		criu_restore_child();
+	}else{
+		FILE* t = fopen("/tmp/criu/token", "w");
+		fclose(t);
+
+		// cp w/o dump
+		int dir = open("/tmp/criu/afl/", O_DIRECTORY);
+		criu_set_images_dir_fd(dir);
+		criu_set_shell_job(true);
+		criu_set_log_file("dump.log");
+		criu_set_leave_running(true);
+		criu_set_log_level(4);
+
+		criu_dump();
+		// do stuff
+		int l = read(STDIN_FILENO, str, 200);
+		//int fifo = open("/tmp/criu/out", 0);
+		//write(fifo, str, l);
+		//close(fifo);
+		if(l >= 3 && str[0] == 'F' && str[1] == 'U' && str[2] == 'Z' && str[3] == 'Z'){
+			system("touch /tmp/criu/FAILED");
+			free(str);
+		}
+		return 0;
+	}
+}
+
+\end{lstlisting}
+
+\end{document}
