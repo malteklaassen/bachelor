@@ -45,7 +45,7 @@
 
 \begin{document}
 
-\author{Malte Klaassen}
+\author{Malte Klaaßen}
 \date{17.11.2018}
 \title{Checkpoint/Restore in Fuzzing}
 
@@ -53,10 +53,10 @@
 
 \begin{abstract}
     Fuzzing hat sich in den letzten Jahren als mächtige Methode zum Auffinden möglicher Sicherheitslücken in Software etabliert. 
-    Bei der Anwendung von Fuzzing auf Applikationen mit längerem Setup oder komplexerem internen Zustandsmodell stößt Fuzzing allerdings schnell auf Performanceprobleme oder versucht höheren manuellen Testaufwand. 
-    Wir untersuchen in dieser Arbeit inwieweit Checkpoint/Restore die genannten Probleme des Fuzzing mitigieren kann. 
+    Bei der Anwendung von Fuzzing auf Applikationen mit längerem Setup oder komplexerem internen Zustandsmodell stößt Fuzzing allerdings schnell auf Performanceprobleme oder verursacht höheren manuellen Testaufwand. 
+    Wir untersuchen in dieser Arbeit, inwieweit Checkpoint/Restore die genannten Probleme des Fuzzing mitigieren kann. 
     Nach einer Zusammenfassung derzeitiger Fuzzing- und C/R-Konzepte stellen wir die Struktur eines integrierten C/R-Fuzzers dar.
-    Weiterhin präsentieren wir einen generischen Ansatz C/R innerhalb klassischer Fuzzing-Engines zu verwenden. Diesen erweitern wir für die spezifische Problemklasse des Testens von Client-Server-Systemen. 
+    Weiterhin präsentieren wir einen generischen Ansatz, C/R innerhalb klassischer Fuzzing-Engines zu verwenden. Diesen erweitern wir für die spezifische Problemklasse des Testens von Client-Server-Systemen. 
     Beispielhaft untersuchen wir eine Integration von CRIU als prominentes C/R-System in LLVM libFuzzer und afl.
     Wir präsentieren Performancemessungen für CRIU und legen auftretende Probleme versuchter Integrationen dar.
 \end{abstract}
@@ -68,12 +68,12 @@
 Mit zunehmender Prävalenz und Prominenz von IT-Systemen ist das Thema der Sicherheit eben dieser Systeme zunehmend in den Fokus gerückt. 
 In der öffentlichen Wahrnehmung stehen zumeist Fälle im Fokus, die Nutzer direkt betreffen. 
 Prominente Beispiele sind Hacks oder Leaks bei Online-Plattformen wie Facebook\cite{facebook} oder Malware-Kampagnen wie WannaCry\cite{ransomware}, zumeist ausgelöst durch Probleme in der Operational Security und verzögerte Patches.
-Seltener in der Öffentlichkeit stehen die tatsächlichen technischen Sicherheitslücken, die diesen zugrunde liegen - wenn dann nur in Fällen mit starker Öffentlichkeitswirkung wie beispielsweise Heartbleed\cite{heartbleed}.\\
+Seltener in der Öffentlichkeit stehen die tatsächlichen technischen Sicherheitslücken, die diesen zugrunde liegen - wenn, dann nur in Fällen mit starker Öffentlichkeitswirkung wie beispielsweise Heartbleed\cite{heartbleed}.\\
 Bei dem Umgang mit derartigen Sicherheitsproblemen gibt es zwei dominante Klassen von Strategien: Proaktive Strategien, welche versuchen, mögliche Probleme und Sicherheitslücken als ganzes zu verhindern, und reaktive Strategien, welche versuchen, die Effekte von Sicherheitslücken zu mindern und eine Ausnutzung zu erschweren.
 Über die Jahrzehnte haben sich dabei verschiedene Ansätze und Methoden zur proaktiven Erkennung, Behebung und Verhinderung von diesen Sicherheitsproblemen entwickelt, beispielsweise\cite{securitymethods}:
 \begin{itemize}
 \item Formulierung von Sicherheitsanforderungen bereits während und vor der Designphase
-\item Formale Beweise, beispielsweise bei kryptografischen oder Netzwerk-Protokollen oder sogar von Programmen, insbesondere in der Funktionalen Programmierung
+\item Formale Beweise, beispielsweise bei kryptografischen oder Netzwerk-Proto\-kollen oder sogar von Programmen, insbesondere in der Funktionalen Programmierung
 \item Compilerchecks und -safeguards sowie statische Codeanalyse
 \item (Externe) Reviews der Software und Penetrationtesting
 \item Klassisches Sicherheitstesting
@@ -81,15 +81,15 @@ Bei dem Umgang mit derartigen Sicherheitsproblemen gibt es zwei dominante Klasse
 Leider sind nicht immer alle diese Methoden anwendbar und haben jeweils ihre eigenen Stärken und Schwächen. So sind formale Beweise der Sicherheit von Programmen außerhalb von einigen modernen Hochsprachen häufig nicht möglich. Klassisches Sicherheitstesting, zum Beispiel mithilfe von Runtime-Sanitizer-Checks, ist zumeist beschränkt auf die Vorstellungskraft des Testers beziehungsweise auf sein Verständnis der zu testenden Software; Grenzfälle oder komplett unerwartete, aber mögliche, Eingaben sind mit klassischem Testing schwer umfassend abzudecken.\\
 
 \section{Fuzzing}
-Fuzzing ist eine Test-Methode, die teil-automatisiert versucht, genau diese Art von mit klassischen Test-Methoden schwer abzudeckenden Fällen umfassend zu erkennen, indem, (statt wie im klassischen Testing, bei dem nur von Menschen mehr oder weniger präzise beschriebene Testfälle ausgeführt werden) ein Codestück, das so genannte Fuzz-Target, wiederholt mit computergenerierten zufälligen Inputs getestet wird. 
-Dabei wird die Ausführung vom Fuzzer überwacht, um beispielsweise Programmabstürze, das Lesen aus unitialisiertem Speicher oder auch undefiniertes Verhalten zu erkennen und zu der problematischen Codestelle zurück zu verfolgen.
+Fuzzing ist eine Test-Methode, die teil-automatisiert versucht, genau diese Art von mit klassischen Test-Methoden schwer abzudeckenden Fällen umfassend zu erkennen, indem (statt wie im klassischen Testing, bei dem nur von Menschen mehr oder weniger präzise beschriebene Testfälle ausgeführt werden) ein Codestück, das so genannte Fuzz-Target, wiederholt mit computergenerierten zufälligen Inputs getestet wird. 
+Dabei wird die Ausführung vom Fuzzer überwacht, um beispielsweise Programmabstürze, das Lesen aus uninitialisiertem Speicher oder auch undefiniertes Verhalten zu erkennen und zu der problematischen Codestelle zurück zu verfolgen.
 
 \subsection{Klassifizierung von Fuzzern}
-Es gibt eine ganze Reihe von Ansätzen zur Klassifizierung von Fuzzern anhand verschiedener Kriterien und entlang verschiedener Achsen. Wir haben uns für diese Arbeit für eine Klassifizerung anhand zweier Eigenschaften entschieden: Ob sich ein Fuzzer beim Testen der Struktur des Programmes und der Struktur der erwartenden Eingaben bewusst ist.
+Es gibt eine ganze Reihe von Ansätzen zur Klassifizierung von Fuzzern anhand verschiedener Kriterien und entlang verschiedener Achsen. Wir haben uns für diese Arbeit für eine Klassifizierung anhand zweier Eigenschaften entschieden: Ob sich ein Fuzzer beim Testen der Struktur des Programmes und der Struktur der erwartenden Eingaben bewusst ist.
 \begin{itemize}
     \item Wenn der Fuzzer sich der Struktur des Programmes bewusst ist und dieses Wissen im Testing nutzt, um bessere Code-Coverage zu erreichen, spricht man von einem White-Box- oder Gray-Box-Fuzzer\footnote{Diese Art des Fuzzings wird auch als Coverage-Guided-Fuzzing bezeichnet.}, je nach Technologie.
         Besitzt der Fuzzer keine Kenntnisse über die Programmstruktur und generiert programmunabhängige Zufallsinputs, spricht man von einem Black-Box-Fuzzer.
-    \item Wenn der Fuzzer sich der erwarteten Struktur des Inputs, beispielsweise bei einem bestimmten Dateiformat oder Netzwerkprotokoll, bewusst ist, spricht man von einem Smart Fuzzer, ansonsten von einem Dumb Fuzzer. Häufig kann dieses Wissen und Informationen darüber, wie Inputs generiert werden sollen beim Start des Fuzzers diesem als sogenanntes Dictionary übergeben werden.
+    \item Wenn der Fuzzer sich der erwarteten Struktur des Inputs, beispielsweise bei einem bestimmten Dateiformat oder Netzwerkprotokoll, bewusst ist, spricht man von einem Smart Fuzzer, ansonsten von einem Dumb Fuzzer. Häufig kann dieses Wissen und Informationen darüber, wie Inputs generiert werden sollen, beim Start des Fuzzers diesem als sogenanntes Dictionary übergeben werden.
 \end{itemize}
 Die meisten modernen Fuzzer können sowohl als Black- als auch als Gray- beziehungsweise White-Box-Fuzzer und sowohl als Smart als auch als Dumb Fuzzer betrieben werden, diese Terme werden zumeist auch zur Beschreibung von Operationsmodi moderner Fuzzer verwendet. 
 Neue Inputs werden anhand der verfügbaren Informationen, also Dictionaries und dem bisher bekannten Corpus (einer Sammlung von bereits bekannten, interessanten Testfällen), generiert. 
@@ -97,10 +97,10 @@ Diese Generierung geschieht beispielsweise durch die Mutation oder Kombination v
 Wird ein solcher Input bei der Ausführung, beispielsweise durch die Code-Coverage-Untersuchung, als interessant für das weitere Fuzzing bewertet, so er wird dem Corpus für die weitere Generierung von neuen Inputs hinzugefügt.
 
 \subsection{Historischer Überblick}
-Testing mit randomisierten Inputs ist kein sonderliche neuer Ansatz\cite{randominput}, jedoch ist die Effizienz von naivem Random Input Test (also Black-Box-Fuzzing) offensichtlich beschränkt, und der größte Teil der Fehler, die auf diese Art und Weise gefunden werden können, ist relativ simpel und selten in den Tiefen des Programmes versteckt. 
+Testing mit randomisierten Inputs ist kein sonderlich neuer Ansatz\cite{randominput}, jedoch ist die Effizienz von naivem Random Input Test (also Black-Box-Fuzzing) offensichtlich beschränkt, und der größte Teil der Fehler, die auf diese Art und Weise gefunden werden können, ist relativ simpel und selten in den Tiefen des Programmes versteckt. 
 Das heißt, es handelt sich zumeist um Fehler, die vergleichsweise einfach auch durch Code-Reviews oder klassische Tests gefunden werden könnten. 
 Entsprechend hatte Random Input Testing für recht lange Zeit nur eine relativ geringe Relevanz, sowohl in der Qualitätssicherung als auch in der Sicherheitsforschung.\\
-Mit dem Aufkommen von effizienteren Gray- und White-Box-Fuzzern und zunehmender Relevanz von IT-Sicherheit in den späten 2000ern entwickelte sich ein breiteres Interesse an Fuzzing\cite{fuzzinghistory}. Es entstanden einige Open Source Fuzzern und Fuzzing-Frameworks und Fuzzing wurde Kernbestandteil des Sicherheits-Testings vieler relevanter Open Source Software Projekte, vorangetrieben insbesondere durch Projekte wie Googles OSS-Fuzz, ein Service zum kontinuierlichen Testen verschiedenster Open Source Software durch mehrere verschiedene Fuzzer.
+Mit dem Aufkommen von effizienteren Gray- und White-Box-Fuzzern und zunehmender Relevanz von IT-Sicherheit in den späten 2000ern entwickelte sich ein breiteres Interesse an Fuzzing\cite{fuzzinghistory}. Es entstanden einige Open Source Fuzzer und Fuzzing-Frameworks und Fuzzing wurde Kernbestandteil des Sicherheits-Testings vieler relevanter Open Source Software Projekte, vorangetrieben insbesondere durch Projekte wie Googles OSS-Fuzz, ein Service zum kontinuierlichen Testen verschiedenster Open Source Software durch mehrere verschiedene Fuzzer.
 
 \subsection{Beschränkungen im Fuzzing}
 Leider ist natürlich auch Fuzzing nicht ohne Probleme und Beschränkungen. 
@@ -121,20 +121,20 @@ Dies spiegelt sich insbesondere in dem geringen benötigten Aufwand wieder, um e
         Weitere Optionen, insbesondere zur Kontrolle des Fuzzer-Verhaltens, werden ebenfalls beim Aufruf der Binary als Kommandozeilen-Optionen übergeben.
 \end{enumerate}
 Neue Inputs werden dabei mittels (durch Coverage-Analyse geleitete) Mutationen des bisherigen Corpuses und, falls vom Tester angegeben, Dictionary-Regeln erzeugt. 
-Hierbei ist es dem Nutzer auch möglich, eigene Mutatoren anzugeben um dem Fuzz-Target besser gerecht werden zu können als es generische Mutatoren können.\\
+Hierbei ist es dem Nutzer auch möglich, eigene Mutatoren anzugeben, um dem Fuzz-Target besser gerecht werden zu können als es generische Mutatoren können.\\
 Da libFuzzer mit der primären Zielrichtug des Testens von APIs und einzelnen Library-Funktionen designet wurde, hat es beispielsweise zwar vollen Support für Multi-Threaded-Anwendungen, jedoch nur eingeschränkten Support für Multi-Process-Anwendungen.
 
 \subsection{american fuzzy lop}
 American fuzzy lop\cite{afl}, kurz afl, ist ein 2014 von Michał Zalewski entwickelter moderner Fuzzer. 
-Ebenso wie libFuzzer macht auch afl Gebrauch von einer Reihe von Sanitizern welche von gcc oder clang angeboten werden. 
+Ebenso wie libFuzzer macht auch afl Gebrauch von einer Reihe von Sanitizern, welche von gcc oder clang angeboten werden. 
 afl benötigt jedoch, anders als libFuzzer, spezielle Versionen dieser Compiler (afl-gcc beziehungsweise afl-clang) und eine spezielle Fuzzing-Binary (afl-fuzz).
 Ein exemplarisches Fuzzing sähe mit afl wie folgt aus:
 \begin{enumerate}
     \item Schreibe ein Fuzz-Target. Ein Fuzz-Target für afl ist im Normalfall ein beliebiges Programm, welches einen Input entweder von \texttt{stdin} oder aus einer spezifizierten Datei liest und dann den zu testenden Code mit diesem Input ausführt.
     \item Kompiliere dieses Fuzz-Target mit einem der afl-Compiler, beispielsweise \texttt{CC=/usr/bin/afl-gcc make fuzztarget}.
-    \item Führe den Fuzzer mit dem kompilierten Fuzz-Target aus: \texttt{afl-fuzz -i input\_directory -o findings\_directory -- ./fuzztarget}. Hierbei können weitere Optionen zum Verhalten des Fuzzers vor \texttt{--} und Optionen des Fuzz-Targets nach diesem angegeben werden.
+    \item Führe den Fuzzer mit dem kompilierten Fuzz-Target aus: \texttt{afl-fuzz -i input\_directory -o findings\_directory -- ./fuzztarget}.\\ Hierbei können weitere Optionen zum Verhalten des Fuzzers vor \texttt{--} und Optionen des Fuzz-Targets nach diesem angegeben werden.
 \end{enumerate}
-Ebenso wie libFuzzer nutzt afl Code-Coverage-Analyse durch Binary-Instrumentation und erweitert den initial angegebenen Corpus um Inputs, welche zu einer Erweiterung der Code-Coverage führen. 
+Ebenso wie libFuzzer nutzt afl Code-Coverage-Analyse durch Binary-Instrumen\-tation und erweitert den initial angegebenen Corpus um Inputs, welche zu einer Erweiterung der Code-Coverage führen. 
 Neue Inputs werden dabei wieder aus den Corpus-Einträgen und explizit angegebenen Regeln zur Inputmutation und -generierung erzeugt.\\
 Ein interessanter Ansatz, den afl zur Erhöhung der Performance einsetzt, ist der sogenannte Fork-Server\cite{afl}: Anstatt für jede Iteration des Fuzz-Targets ein eigenes \texttt{execve}, Linking und entsprechende Initialisierungen durchzuführen, wird das Fuzz-Target nur einmal gestartet, direkt nach dem Start eingefroren und mit copy-on-write als Iterationen des Fuzz-Targets in separate Prozesse geklont.\\
 Auch wenn afl weniger spezialisiert auf eine bestimmte Art von zu testender Software ist als beispielsweise libFuzzer, so hat afl auch keinen vollen Support für alle möglichen Programmarten, beispielsweise besitzt afl nur eingeschränkten Netzwerk- und Multi-Process-Support.
@@ -145,8 +145,8 @@ Mit Checkpoint/Restore, kurz C/R, manchmal auch Checkpoint/Restart, bezeichnet m
 C/R-Systeme finden Anwendung in verschiedenen Bereichen:
 \begin{itemize}
     \item Im Debugging und in der Fault Recovery durch das Zurücksetzen eines Programmes auf einen vorherigen Zustand
-    \item In der Beschleunigung oder Optimierung von Prozessen durch das Checkpoint-basierte Fortsetzen von Anwendungen anstelle von rechenzeitaufwändigen Komplettausführungen
-    \item Im der Optimierung von Anwendungen durch Aussetzen der Ausführung von Programmen wenn diese gerade nicht benötigt werden
+    \item In der Beschleunigung oder Optimierung von Prozessen durch das Check\-point-basierte Fortsetzen von Anwendungen anstelle von rechenzeitauf\-wändigen Komplettausführungen
+    \item In der Optimierung von Anwendungen durch Aussetzen der Ausführung von Programmen, wenn diese gerade nicht benötigt werden
     \item In der Migration von Prozessen zwischen verschiedenen Maschinen
 \end{itemize}
 
@@ -161,12 +161,12 @@ Bei der Klassifizierung nach Typ oder Implementierungsebene unterscheiden wir gr
     \item Das Checkpointen von Virtuellen Maschinen beziehungsweise Containern
 \end{itemize}
 %\subsubsubsection{Userspace-C/R}
-Im klassischen Userspace-Checkpointing findet der Checkpointing-Prozess größtenteils transparent gegenüber dem Kernel statt, das heißt das C/R-Tool nutzt aus dem Userspace zugängliche Ressourcen wie \texttt{/proc/} oder Intercepts von Library- oder Syscalls zum Sammeln der notwendigen Checkpoint-Informationen und es nutzt ebenfalls nur ohne besondere Privilegien zugängige Ressourcen zur Wiederherstellung. 
+Im klassischen Userspace-Checkpointing findet der Checkpointing-Prozess größten\-teils transparent gegenüber dem Kernel statt, das heißt das C/R-Tool nutzt aus dem Userspace zugängliche Ressourcen wie \texttt{/proc/} oder Intercepts von Library- oder Syscalls zum Sammeln der notwendigen Checkpoint-Informationen und es nutzt ebenfalls nur ohne besondere Privilegien zugängige Ressourcen zur Wiederherstellung. 
 Dieses Vorgehen führt in reinen Userspace-C/R-Systemen wie DMTCP\cite{dmtcp} (Distributed MultiThreaded CheckPointing) unter Umständen zu einigen Fallstricken oder Problemen. 
-So können zum Beispiel nicht alle Eigenschaften eines Programmes, beispielsweise die PID, nicht ohne weiteres korrekt wiederhergestellt werden. 
-Die Intercepts benötigen alternative Libraries, die erstens spätestens zur Startzeit mit der Anwendung gelinkt werden müssen, zweitens häufig Beschränkungen darauf haben mit welchen Programmen (bspw. Sprachen) sie genutzt werden können und drittens unter Umständen die Funktionsweise des Programmes ändern könnten. Zudem sind Performanceeinbußen durch das Duplizieren von Kernelstrukturen im Userspace zu erwarten.\\ \\
+So können zum Beispiel nicht alle Eigenschaften eines Programmes, beispielsweise die PID, ohne weiteres korrekt wiederhergestellt werden. 
+Die Intercepts benötigen alternative Libraries, die erstens spätestens zur Startzeit mit der Anwendung gelinkt werden müssen, zweitens häufig Beschränkungen besitzen, mit welchen Programmen (bspw. Sprachen) sie genutzt werden können, und drittens unter Umständen die Funktionsweise des Programmes ändern könnten. Zudem sind Performanceeinbußen durch das Duplizieren von Kernelstrukturen im Userspace zu erwarten.\\ \\
 %\subsubsubsection{Kernelebene-C/R}
-Dem gegenüber steht das Checkpointing auf mit Kernelhilfe, beispielsweise BLCR\cite{BLCR} (Berkeley Lab's Linux Checkpoint/Restart), oder das Checkpointen komplett im Kernel, beispielsweise Linux-C/R\cite{linuxcr}.
+Dem gegenüber steht das Checkpointing auf mit Kernelhilfe, z.B. BLCR\cite{BLCR} (Berkeley Lab's Linux Checkpoint/Restart), oder das Checkpointen komplett im Kernel, beispielsweise Linux-C/R\cite{linuxcr}.
 Diese C/R-Systeme nutzen den Kernel direkt, um alle nötigen Informationen während des Checkpointings zu sammeln. 
 Sie benötigen also keine Libraries für das Sammeln dieser Informationen durch das Abfangen von Syscalls und ähnlichem und haben alle nötigen Privilegien, um alle Eigenschaften der Anwendung korrekt und vollständig wiederherzustellen. 
 Allerdings muss der Kernel eben diese Funktionalitäten anbieten, damit Kernelebene-C/R-Tools eingesetzt werden können. Obwohl es wiederholt Versuche der Integration von C/R-Tools in den Linux Kernel gab, ist dies bisher nicht geschehen, das heißt es wird zur Nutzung ein gepatchter Kernel oder ein Kernel mit zusätzlichen Modulen benötigt.\\
@@ -174,7 +174,7 @@ Das Checkpointing mit diesen Kernelebenen-C/R-Tools folgt zumeist diesem Schema:
 \begin{enumerate}
     \item Einfrieren und Synchronisieren der Prozesse und Threads
     \item Erfassen von globalen Informationen (das heißt Informationen, die nicht direkt Teil der zu checkpointenden Anwendung sind), zum Beispiel Namespaces und Container
-    \item Erfassen der Prozess- beziehungsweise Thread-Hierarchien und -Informationen wie zum Beispiel Parent/Child-Verhältnisse und PIDs
+    \item Erfassen der Prozess- beziehungsweise Thread-Hierarchien und -Informa\-tionen wie zum Beispiel Parent/Child-Verhältnisse und PIDs
     \item Erfassen des Status der einzelnen Prozesse und Threads, beispielsweise Signals, geöffnete Files und FDs
     \item Beenden oder Weiterausführung der Anwendung, Schreiben der erfassten Informationen in ein Image
 \end{enumerate}
@@ -210,7 +210,7 @@ Generell sehen wir zwei Ansätze zur Integration von Checkpoint/Restore-Tools un
     \item Implementierung des Checkpointing und Restoring innerhalb des Fuzz-Targets, transparent zum Fuzzer
 \end{enumerate}
 Die erste Alternative, ein C/R-Fuzzer, wäre eine umfassendere Lösung als die Ad-hoc-Lösung der Implementierung im Fuzz-Target und bietet eine größere Palette an Möglichkeiten als die Fuzz-Target-Lösung, benötigt allerdings eben einen C/R-Fuzzer: Etwas, das nach unseren Recherchen weder in Software existiert noch in Konzepten diskutiert wurde.
-Ein allererster Ansatz, wenn auch nicht als C/R bezeichnet und unter anderen Aspekten erdacht ist das Fork-Server-Konzept in afl\cite{aflrestore}, siehe Kapitel 2.5. \\
+Ein allererster Ansatz, wenn auch nicht als C/R bezeichnet und unter anderen Aspekten erdacht, ist das Fork-Server-Konzept in afl\cite{aflrestore}, siehe Kapitel 2.5. \\
 %Aim of this thesis: Answer the question wether we could solve some or all of aboves issues in using fuzzing for security testing by using C/R. In this chapter we will look at a few approaches and their requirements, general feasibility and what issues they would solve.
 %There are two generally possible approaches: 1. Using C/R in a Fuzzer that is not just aware that C/R is happening but does the C/R parts for you and makes active use of C/R for performance 2. Using a "normal" fuzzer and do all the C/R stuff in the fuzztarget
 \subsection{C/R-Fuzzer}
@@ -253,7 +253,7 @@ Zu testender Code oder Funktion
 Hierbei hält der Breakpoint die Ausführung des Fuzz-Targets an und informiert den Fuzzer darüber, dass er an dieser Stelle das Fuzz-Target checkpointen soll.\\
 Ziel eines solchen simplen C/R-Fuzzers ist es, den Overhead durch wiederholte Ausführung des Setups zu reduzieren.
 Im Folgenden bezeichnen wir mit $T_{Setup}$ die Laufzeit des inputunabhängigen Setups, mit $T_{Execution}$ die (mittlere) Laufzeit des inputabhängigen Setups und des zu testenden Codes, sowie mit $T_{Checkpoint}$ und $T_{Restore}$ die benötigte Zeit für eine Checkpointing- beziehungsweise Restoreoperation. 
-Für die die Laufzeit eines normalen, nicht-C/R Fuzzers bei $n$ benötigten Operationen ergibt sich
+Für die Laufzeit eines normalen, nicht-C/R Fuzzers bei $n$ benötigten Operationen ergibt sich
 \begin{equation}
     T_{Non-C/R}(n) = n (T_{Setup} + T_{Execution})
 \end{equation}
@@ -277,12 +277,12 @@ Wir betrachten hier zwei Varianten dieses Ansatzes: zuerst in Kapitel 4.2.1 eine
 Kapitel 4.2.2 behandelt eine problemspezifische Architektur, die durch Anwendung von Checkpoint/Restore-Methoden versucht, das effiziente Fuzzen von Netzwerkprotokollen als Beispiel für komplexe mehrstufige Programme durch Exploration des Zustandsgraphen zu ermöglichen.
 %Can we make something work with normal Fuzzers? What could it look like? What could we use it for?
 \subsubsection{Naiver Non-C/R-Fuzzer}
-Eine konzeptuell recht einfacher Ansatz ist das Checkpointing nach der Ausführung des unabhängigen Setups, ähnlich wie bei dem oben beschriebenen C/R-Fuzzer.
+Eine konzeptuell recht einfacher Ansatz ist das Checkpointing nach der Ausfüh\-rung des unabhängigen Setups, ähnlich wie bei dem oben beschriebenen C/R-Fuzzer.
 Dies ermöglich in späteren Ausführungen des Fuzz-Targets ein Aufsetzen an dieser Stelle.
 Anders als bei einem C/R-Fuzzer nach Kapitel 4.1 (bei dem diese Information durch den Fuzzer verwaltet wird) muss hier jedoch im Fuzz-Target bestimmt werden, ob es sich in der ersten Iteration oder einer späteren Iteration befindet. 
 In der ersten Iteration muss das Setup einmalig ausgeführt und danach gecheckpointed werden; in späteren Iterationen wird das Setup nicht erneut ausgeführt, sondern der Checkpoint wiederhergestellt und die Ausführung, beginnend direkt mit dem zu testenden Code, fortgesetzt.
 Dies kann beispielsweise durch das Setzen von Systemvariablen oder das Erstellen eines Tokens im Dateisystem geschehen - ist die Variable bei einer Ausführung also gesetzt oder existiert der Token, so befindet sich das Fuzz-Target in einer späteren Iteration und überspringt das Setup durch ein Restore.
-Ein solches Fuzz-Target folgt der Struktur aus Listing 5.\footnote{In Kapitel 6 stellen wir prototypische Umsetzungen mit CRIU und afl/libFuzzer dar.}
+Ein solches Fuzz-Target folgt der Struktur aus Listing 5.
 \begin{lstlisting}[caption=Struktur C/R-Fuzz-Target für Non-C/R-Fuzzer]
 Falls der Token existiert:
     Restore
@@ -296,7 +296,7 @@ Sonst:
 Wenn in Zeile 2 restoret wird, so wird die alte, gecheckpointete Instanz wiederhergestellt und setzt ihre Ausführung in Zeile 7 fort, holt sich also neuen Input und testet mit diesem.\\
 Hierbei sind folgende Punkte zu beachten:
 \begin{itemize}
-    \item Wie auch beim C/R-Fuzzer ist das Setup in einen inputunabhängigen und einen inputabhängigen Teil aufzubrechen. Dabei wird nur der inputunabhängige Teil vor dem Checkpoint ausgeführt, der inputabhängige Teil wird zusammen mit dem zu testenden Code in jeder Iteration in Zeile 7 ausgeführt.
+    \item Wie auch beim C/R-Fuzzer ist das Setup in einen inputunabhängigen und einen inputabhängigen Teil aufzubrechen. Dabei wird nur der input\-unabhängige Teil vor dem Checkpoint ausgeführt, der inputabhängige Teil wird zusammen mit dem zu testenden Code in jeder Iteration in Zeile 7 ausgeführt.
     \item Da mit dem Restore in Zeile 2 ein neuer Prozess entsteht, muss der genutzte Fuzzer Multiprocess-Anwendungen behandeln können und über die Erstellung des (eigentlich zu testenden) restoreten Prozesses informiert werden. 
         Inbesondere muss unerwartetes beziehungsweise unerwünschtes Verhalten im restoreten Prozess erkannt werden können. 
         Dies kann beispielsweise durch eine restore-as-child Funktionalität vom C/R-Tool realisiert werden\footnote{Zum Beispiel von CRIU unterstützt.}, benötigt allerdings einen Fuzzer mit Multiprocess-Fähigkeiten.
@@ -355,9 +355,9 @@ Das Fuzz-Target übernimmt dabei in diesem Ansatz mehrere Aufgaben:
 \begin{itemize}
     \item Client-Server-Interaktion: Das Fuzz-Target implementiert nicht einen wirklichen Client, der das erwünschte Protokoll spricht, sondern simuliert nur einen solchen Client, indem es die von der Fuzzing-Engine generierten Inputs als Client-Input an den Server übergibt, beispielsweise über eine bereits etablierte TCP-Verbindung zu dem Server.
     \item Verwaltung des Servers: Das Fuzz-Target hält in persistenter Form, beispielsweise durch Schreiben ins Dateisystem, den bisher gefundenen Zustandsgraphen des Servers vor, also die gefundenen Zustände und die Inputs, die zu Übergängen zwischen diesen führen. 
-        Zusätzlich wird jeder Zustand, wenn er das erste Mal erreicht wird, gecheckpointet und das entsprechende Image mit dem Zustand verknüpft, das heißt das Fuzz-Target muss auch erkennen wenn einer neuer Zustand erreicht wird.
+        Zusätzlich wird jeder Zustand, wenn er das erste Mal erreicht wird, gecheckpointet und das entsprechende Image mit dem Zustand verknüpft, das heißt das Fuzz-Target muss auch erkennen, wenn einer neuer Zustand erreicht wird.
 \end{itemize}
-Neu generierte Inputs werden dabei hintereinander auf alle bekannten Zustände angewendet, der Zustandsgraph wird um neu gefundene Kanten und neue Zustände erweitert.\\
+Neu generierte Inputs werden dabei hintereinander auf alle bekannten Zustände angewendet, der Zustandsgraph wird um neu gefundene Kanten und neue Zustän\-de erweitert.\\
 Listing 7 implementiert ein solches Fuzz-Target in Pseudocode.
 \begin{lstlisting}[mathescape, caption=Fuzz-Target zur Exploration des Zustandsgraphen]
 if token not set:
@@ -427,10 +427,10 @@ Bei Fragestellungen, bei denen eine sinnvolle Definition des States möglich ist
 \end{itemize}
 Nachteile dieses Ansatzes sind:
 \begin{itemize}
-    \item White-Box-Fuzzing beziehungsweise klassisches Gray-Box-Fuzzing durch Code-Coverage werden, wie schon Ansätzen in Kapitel 4.1 und 4.2.1, durch die permanente Variation des tatsächlich ausgeführten Codes erschwert beziehungsweise könnten in bisherigen Fuzzern tatsächlich gar nicht nutzbar sein, da der eigentlich ausgeführte Code, der Client, gar nicht der Code ist, den wir Fuzzen wollen - dies wäre der Server. 
+    \item White-Box-Fuzzing beziehungsweise klassisches Gray-Box-Fuzzing durch Code-Coverage werden, wie schon bei den Ansätzen in Kapitel 4.1 und 4.2.1, durch die permanente Variation des tatsächlich ausgeführten Codes erschwert beziehungsweise könnten in bisherigen Fuzzern tatsächlich gar nicht nutzbar sein, da der eigentlich ausgeführte Code, der Client, gar nicht der Code ist, den wir Fuzzen wollen - dies wäre der Server. 
         Stattdessen stellt diese Art des Fuzzings jedoch eine eigene Art des Gray-Box-Fuzzings dar, da das Fuzz-Targets nach und nach die Struktur des Servers, wenn auch auf einem höheren Level als klassische Code-Coverage, herausarbeitet und darüber versucht, das Fuzzing zu optimieren.
     \item Selbst wenn Code-Coverage-Messungen möglich sind, so ist ihre Effektivität doch dadurch abgeschwächt, dass diese Inputs auf alle Zustände angewendet werden, nicht nur auf diejenigen Zustände, bei denen sie ob der Code-Coverage ausgewählt wurden. 
-    \item Ebenso wie bei der naiven C/R-Implemetierung im Fuzz-Target muss der Fuzzer auch hier mit Multiprocess-Anwendung umgehen können, insbesondere den Server - als vom Fuzz-Target gestartetes, eigenständiges Programm - in die Suche nach problematischem Verhalten einbeziehen.
+    \item Ebenso wie bei der naiven C/R-Implementierung im Fuzz-Target muss der Fuzzer auch hier mit Multiprocess-Anwendung umgehen können, insbesondere den Server - als vom Fuzz-Target gestartetes, eigenständiges Programm - in die Suche nach problematischem Verhalten einbeziehen.
     \item Das Formulieren von Regeln, Dictionaries, \dots für die Inputs eines Smart-Fuzzers wird dadurch verkompliziert, dass diese Regeln nun nicht nur für einen Pfad oder eine bestimmte Funktion gelten sollen, sondern für das ganze zu testende Programm. 
         Dies kann unter Umständen zu einer Vergrößerung des Suchraums oder sogar der nicht-Nutzbarkeit von Smart-Fuzzern führen, was wiederum Performanceverluste bedeutet.
     \item In Fällen, in denen es nur wenige gültige Übergänge auf einen Zustand mit hoher Distanz vom Ausgangsknoten gibt, kann es passieren, dass die Inputs bereits untersucht wurden oder als wenig vielversprechend von der Fuzzing-Engine verworfen wurden. Um dies zu vermeiden, sollte die Optimierung der Inputs, wenn überhaupt möglich, nicht zu zielgerichtet erfolgen.
@@ -465,7 +465,7 @@ CRIU kann auf zwei Arten genutzten werden:
 Unabhängig davon, welche der beiden Optionen man nutzt, folgt das Checkpointing und Restoring in etwa den gleichen Schritten:
 \begin{itemize}
     \item Falls RPC genutzt werden soll, muss der CRIU-Service bereits aktiv sein (beispielsweise zu starten durch \texttt{criu service}), falls die C-API genutzt wird, muss diese mittels \texttt{criu\_init\_opts()} initialisiert werden.
-    \item Man bestimmt, welchen laufenden Prozess man checkpointen möchte, meist über die \texttt{PID} durch Nutzung der \texttt{--tree \$PID} Option beziehungsweise \texttt{criu\_set\_pid(pid)}. Falls sich ein Prozess über die C-API selbst checkpointen möchte, muss \texttt{criu\_set\_pid} nicht explizit aufgerufen werden. Zusätzlich wird angegeben, ob der Prozess nach dem Checkpointing fortgesetzt werden oder beendet werden soll.
+    \item Man bestimmt, welchen laufenden Prozess man checkpointen möchte, meist über die \texttt{PID} durch Nutzung der \texttt{--tree \$PID} Option beziehungsweise \texttt{criu\_set\_pid(pid)}. Falls sich ein Prozess über die C-API selbst checkpointen möchte, muss \texttt{criu\_set\_pid} nicht explizit aufgerufen werden. Zu\-sätzlich wird angegeben, ob der Prozess nach dem Checkpointing fortgesetzt oder beendet werden soll.
     \item Man gibt einen Pfad oder einen FD für das Image-Directory an, entweder über die \texttt{--images-dir \$IMGDIR} Option oder \texttt{criu\_set\_images\_dir\_fd(fd)}, bei der Nutzung der C-API muss \texttt{fd} ein bereits geöffneter FD auf das Verzeichnis sein, in das das Image geschrieben werden soll.
     \item Spezifizierung weiterer Zusatzinformationen, beispielsweise \texttt{--shell-job} beziehungsweise \texttt{criu\_set\_shell\_job(true)}, \texttt{--tcp-established} beziehungsweise \texttt{criu\_set\_tcp\_established(true)}.
     \item Modifikation der Socket-Location des Services, des Log-Levels, Log-Files, \dots falls nötig oder erwünscht
@@ -477,7 +477,7 @@ Wie bereits in der Übersicht verschiedener C/R-Systeme erwähnt ist CRIU ein Us
 Dies bedeutet insbesondere auch, dass die zu checkpointende Anwendung weder zur Kompilierzeit noch zum Zeitpunkt des Anwendungsstartes sich des zukünftigen Checkpointings bewusst sein muss.
 Die von CRIU genutzten Kernel-Features sind im Mainline-Linux-Kernel enthalten und es sind alle nötigen Features aktiviert, insbesondere:
 \begin{itemize}
-    \item \texttt{CONFIG\_CHECKPOINT\_RESTORE}, ein Feature, das eine Reihe von für C/R relevante Tools und Informationen enabled, beispielsweise \texttt{prctl} zur Manipulation von Prozessen oder eine Erweiterung der in \texttt{/proc/} verfügbaren Informationen, beispielsweise um die \texttt{/proc/<pid>/map\_files}. 
+    \item \texttt{CONFIG\_CHECKPOINT\_RESTORE}, ein Feature, das eine Reihe von für C/R relevante Tools und Informationen enabled, beispielsweise \texttt{prctl} zur Manipulation von Prozessen oder eine Erweiterung der in \texttt{/proc/} verfügbaren Informationen, zum Beispiel um die \texttt{/proc/<pid>/map\_files}. 
     \item \texttt{CONFIG\_NAMESPACES} sowie Features für diverse spezielle Namespaces, namentlich UTS, IPC, PID und Network Namespaces.
     \item Weitere Features zum Monitoring verschiedener Socket-Arten.
 \end{itemize}
@@ -498,9 +498,9 @@ Das Restoring weicht etwas vom in Kapitel 3.1.1 beschriebenen Muster ab:
 \end{enumerate}
 Der Restorer-Blob ist, ebenso wie der Parasit, ein PIE-kompiliertes Stück Code, welches kurzfristig in Shared Memory im Anwendungsprozess lebt, um dort Aufgaben der CRIU-Anwendung zu übernehmen. Dabei agiert der Restorer-Context als Verbindungsstück zwischen dem CRIU-Fork und dem eigentlichen Anwendungsprozess. Er reorganisiert beispielsweise die bereits in Schritt 3 gefüllten Virtual Memory Areas, so dass die Mappings mit der Anwendung übereinstimmen, und stellt die korrekten PIDs wieder her.\\ \\
 Die beim Checkpointing entstehenden CRIU Images bestehen aus mehreren Dateien, organisiert in dem beim Checkpointing spezifizierten Ordner. Die Dateien fallen in drei Kategorien: \begin{itemize}
-    \item Dateien im Protobuff-Format, welche einen Großteil der eigentlichen Checkpoint-Informationen enthalten, wie zum Beispiel generelle Checkpointing Informationen in \texttt{inventory.img} oder Informationen über die Credentials in \texttt{creds.img}
+    \item Dateien im Protobuff-Format, welche einen Großteil der eigentlichen Check\-pointing Informationen enthalten, wie zum Beispiel generelle Checkpointing Informationen in \texttt{inventory.img} oder Informationen über die Credentials in \texttt{creds.img}
     \item CRIU-spezifische Binary-Images, welche beispielsweise die Memory-Inhalte und Pagemaps enthalten
-    \item Dateien in einem CRIU-unspezifischen Format die allgemeine Systeminformationen wie Routing- und Netzwerkinformationen enthalten.
+    \item Dateien in einem CRIU-unspezifischen Format, die allgemeine Systeminformationen wie Routing- und Netzwerkinformationen enthalten.
 \end{itemize}
 
 \subsection{Fuzzing-Vorbereitungen}
@@ -535,8 +535,8 @@ Das TCP-RST-Problem (Nummer 1) lässt sich durch manuelles Setzen eben dieser Re
     system(iptables4);
 \end{lstlisting}
 Die Problematik belegter PIDs (Nummer 2) lässt sich durch die Isolation der Anwendung durch beispielsweise eine Virtuelle Maschine beziehungsweise einen Container oder die Nutzung von PID Namespaces\cite{pidns} lösen. 
-Unter Umständen ließe sich das PID-Problem auch durch die Deaktivierung der \texttt{--shell-job} Option lösen, dies würde jedoch das Ausführen der Anwendungen in einer eigenen Session erfordern - etwas die betrachteten Fuzzing-Engines jedoch nicht unterstützen.\\
-Der TCP Keepalive Timeout (Nummer 3) und verwandte Probleme lassen sich auf mehrere Arten und Weisen lösen, sollten sie ein Problem darstellen. Entweder kann die Zeit bis zum Timeout verlängert werden \footnote{\texttt{echo \$new\_time\_in\_sec > /proc/sys/net/ipv4/tcp\_keepalive\_time}} oder der erfasste Zeitpunkt der letzten Nachricht im CRIU-Image kann angepasst werden.
+Unter Umständen ließe sich das PID-Problem auch durch die Deaktivierung der \texttt{--shell-job} Option lösen, dies würde jedoch das Ausführen der Anwendungen in einer eigenen Session erfordern - etwas, das die betrachteten Fuzzing-Engines jedoch nicht unterstützen.\\
+Der TCP Keepalive Timeout (Nummer 3) und verwandte Probleme lassen sich auf mehrere Arten und Weisen lösen, sollten sie ein Problem darstellen. Entweder kann die Zeit bis zum Timeout verlängert werden\footnote{\texttt{echo \$new\_time\_in\_sec > /proc/sys/net/ipv4/tcp\_keepalive\_time}} oder der erfasste Zeitpunkt der letzten Nachricht im CRIU-Image kann angepasst werden.
 %It does not work out of the box in a fuzzing context, due to: 1. Firewall rules and resets, we can fix that by adding those manually after each iteration. 2. PIDs are already in use again. There could be two fixes here: Either putting it in it's own pid namespace or possibly by running it in a context that does not require exact PID matches, e.g. detached from the shell, ...
 \subsection{Performance}
 Bei der Betrachtung der Performance von C/R-Systemen sind zwei Aspekte zu betrachten: 
@@ -613,10 +613,10 @@ Um die Nutzbarkeit libFuzzers für C/R-Fuzzing zu testen, implementierten wir ei
 Das Zwischenspeichern des Inputs ist zwingend notwendig, da libFuzzer den Input immer als Argument beim Aufruf übergibt. 
 Eine erfolgreiche Ausführung wurde unter anderem durch folgende Probleme verhindert:
 \begin{itemize}
-    \item Ist AddressSanitizer\cite{adsan} (ASan) aktiviert, so scheitert CRIU bereits in der ersten Ausführung während des Checkpointings: Eine Page wird als $\sim 300GB$ groß erkannt, die Allokierung entsprechendes Speichers scheitert und damit auch das Pagemapping und das Pagedumping mittels des Parasitencodes (siehe Listing 9). 
+    \item Ist AddressSanitizer\cite{adsan} (ASan) aktiviert, so scheitert CRIU bereits in der ersten Ausführung während des Checkpointings: Eine Page wird als $\sim 300GB$ groß erkannt, die Allokierung entsprechenden Speichers scheitert und damit auch das Pagemapping und das Pagedumping mittels des Parasitencodes (siehe Listing 9). 
         Die Ursache hierfür ist, dass AddressSanitizer $20TB$ virtuellen Speicher allokiert\cite{aflasan}. Restore-Versuche scheitern erwartungsgemäß daran, dass das Image nicht komplett erzeugt wurde (insbesondere \texttt{inventory.img}, die Top-Level-Beschreibung des Images, fehlt, siehe Listing 10).
-        Prinzipiell lässt sich ASan abschalten, allerdings beschränkt natürlich die Aussagekraft des Fuzzings.
-    \item CRIU setzt zwingend eine Wiederherstellung unter den gleichen PIDs vorraus. Andererseits hält libFuzzer die PID seine fuzzTargets dauerhaft belegt. Dies führt bei der ersten Ausführung des Fuzz-Targets mit Restore zu einem Konflikt um die PID und dem Scheitern des Restoreversuches, siehe Listing 11. Eine Isolierung der Fuzz-Targets in eigene PID-Namespaces wird durch libFuzzer nicht unterstützt.
+        Prinzipiell lässt sich ASan abschalten, allerdings beschränkt dies natürlich die Aussagekraft des Fuzzings.
+    \item CRIU setzt zwingend eine Wiederherstellung unter den gleichen PIDs voraus. Andererseits hält libFuzzer die PID seine fuzzTargets dauerhaft belegt. Dies führt bei der ersten Ausführung des Fuzz-Targets mit Restore zu einem Konflikt um die PID und dem Scheitern des Restoreversuches, siehe Listing 11. Eine Isolierung der Fuzz-Targets in eigene PID-Namespaces wird durch libFuzzer nicht unterstützt.
 \end{itemize}
 \begin{lstlisting}[caption=Pagemapping/dumping Errors mit ASan]
 (00.010591) Error (criu/pagemap-cache.c:54): pagemap-cache: pmc_init: Can't allocate 30064246792 bytes
@@ -637,15 +637,15 @@ Selbst wenn diese Probleme gelöst werden sollten, wäre eine Nutzbarkeit libFuz
 Ebenso wie bei der Untersuchung libFuzzers implementierten wir für den afl-Test ein simples C/R-Fuzz-Target wie in Kapitel 4.2.1 beschrieben, siehe Anhang 3.\\
 Hier verhindert ein architekturelles Problem eine erfolgreiche Ausführung:
 Durch die Fork-Server-Optimierung in AFL wie in Kapitel 2.5 beschrieben teilt sich jede Fuzz-Target-Ausführung als Prozess Memory Areas mit dem initialen Stopped Process Image. 
-Wenn die Fuzz-Target-Ausführung CRIU-initiiert das Checkpointing ausführen soll scheitert dies, da CRIU Shared Memory Nutzung über SysVIPC entdeckt (zu einem nicht zu dumpenden Prozess) und deswegen das Checkpointing abbricht, siehe Listing 12.
+Wenn die Fuzz-Target-Ausführung CRIU-initiiert das Checkpointing ausführen soll, scheitert dies, da CRIU Shared Memory Nutzung über SysVIPC entdeckt (zu einem nicht zu dumpenden Prozess) und deswegen das Checkpointing abbricht, siehe Listing 12.
 Damit steht die AFL-Architektur über Cloning mit Copy-on-Write aus einem Stopped Process Image einem C/R-System wie CRIU konzeptionell entgegen.\\
 Unabhängig von diesem Architekturproblem sind Probleme wie bei libFuzzer diskutiert absehbar:
 \begin{itemize}
     \item Fehlender voller Multi-Process-Support
     \item ASan-Inkompatibilität zu CRIU\footnote{Die Nutzung von ASan ist zwar nicht per Default aktiviert, eine Nutzung wäre jedoch im Normalfall empfohlen.}
 \end{itemize}
-
-\begin{lstlisting}[caption=Checkpointing Error durch Shared Memory]
+\newpage
+\begin{lstlisting}[caption=Checkpointing Error durch Shared Memory,]
 (00.017584) Error (criu/cr-dump.c:431): Task 25961 with SysVIPC shmem map @7f24f6a8b000 doesn't live in IPC ns
 (00.017590) Error (criu/cr-dump.c:1411): Dump mappings (pid: 25961) failed with -1
 (00.017622) Unlock network
@@ -664,7 +664,7 @@ Weitere Hindernisse wie das Checkpointing einer ASan-instrumentalisierten Binary
 
 \section{Ausblick}
 Der praktische Teil dieser Arbeit (Kapitel 5 und 6) zeigt deutlich, dass die Fuzzing-Engines der erfolgversprechendere Ansatzpunkt für eine Implementierung von C/R-Fuzzing sind.
-Eine reine C/R-Implementierung im Fuzz-Target, ohne Mitwirkung der Fuzzing-Engine, wird auch mit eventuellen Workarounds erfolgreich keine stabile C/R-Fuzzing-Umgebung erzielen - es ist immer mit wieder neu auftretenden Problemen zu rechnen.\\
+Eine reine C/R-Implementierung im Fuzz-Target, ohne Mitwirkung der Fuzzing-Engine, wird auch mit eventuellen Workarounds keine erfolgreiche, stabile C/R-Fuzzing-Umgebung erzielen - es ist immer mit wieder neu auftretenden Problemen zu rechnen.\\
 In Kapitel 4 haben wir bereits auf die konzeptuelle Ähnlichkeit des Fork-Server-Ansatzes in afl zu C/R hingewiesen (faktisch ein Setup+Restore); in \cite{aflrestore} wird auch ein Ausblick erwähnt, den Zeitpunkt des Forks frei bestimmen zu können und damit das inputunabhängige Setup im Sinne dieser Arbeit nur einmal auszuführen.
 Mit diesem Ansatz ließe sich die Problemklasse aus Kapitel 4.1 und 4.2.1 angehen.
 Die Kosten $T_{Setup}$ fielen dann nur einmalig je Fuzzing an.\\
