@@ -5,6 +5,7 @@
 \usepackage{amsmath}
 \usepackage{listings}
 \usepackage{tikz}
+\usepackage{booktabs}
 \lstset{
 	frame=single,
 	breaklines=true
@@ -280,16 +281,92 @@
 \begin{frame}
     \frametitle{CRIU}
     \begin{itemize}
-        \item
+        \item "Checkpoint/Restore in Userspace"
+        \item Als Userspace-Ersatz zu OpenVZ-Kernel-CR entwickelt (2011)
+        \item Viele unterstützte Features
+        \item Wird noch aktiv unterstützt
+        \item Nutzt unveränderte Binaries, benötigt keine speziellen Initialisierungen bei Programmstart
+        \item Nutzung entweder über RPC/C-API oder Commandline-Tool
     \end{itemize}
 \end{frame}
 
 \begin{frame}
     \frametitle{CRIU: Funktionsweise}
+    \begin{itemize}
+        \item CRIU arbeitet (größtenteils) im Userspace
+        \item Nutzt einige Kernelfeatures und privilegierte Operationen (seit 3.11 im Mainline Linux-Kernel)
+            \begin{itemize}
+                \item ptrace, \texttt{CONFIG\_CHECKPOINT\_RESTORE} u.A. für prctl
+                \item \texttt{CONFIG\_NAMESPACES} sowie weitere Namespace-Features
+                \item Socketmonitoring
+            \end{itemize}
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{CRIU: Funktionsweise - Checkpointing}
+    \begin{itemize}
+        \item Einfrieren des Prozessbaumes (freezer cgroup oder ptrace)
+        \item Extraktion der Prozessinformationen
+            \begin{itemize}
+                \item Extern durch Lesen von \texttt{/proc/} und ptrace
+                \item Intern durch Injektion eines Parasite-Blobs mittels ptrace
+            \end{itemize}
+        \item Schreiben des Images, Auftauen oder Beenden der Anwendung
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{CRIU: Funktionsweise - Restore}
+    \begin{itemize}
+        \item Zerlegung des Images in einzelne Prozesse und Zuweisung von Shared Ressources
+        \item Erstellung eines entsprechenden Prozessbaumes durch Forken der CRIU-Anwendung
+        \item Wiederherstellen der Prozessinformationen
+            \begin{itemize}
+                \item Extern durch die CRIU-Anwendung (bspw. Speicherinhalte, Sockets, Namespaces)
+                \item Intern durch die Nutzung eines Restorer-Blobs in den geforkten Prozessen
+            \end{itemize}
+        \item Unmapping des Restorer-Contextes, Fortsetzen der Anwendung
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{CRIU: CRIU+Fuzzing?}
+    \begin{itemize}
+        \item CRIU wurde nicht gezielt für Fuzzing entwickelt
+        \item Es ergeben sich einige (lösbare) Probleme:
+            \begin{itemize}
+                \item Wiederholtes Wiederherstellen von Anwendungen mit etablierter TCP-Verbindung $\rightarrow$ Firewall-Regel
+                \item Genutzte PID bereits wieder neu vergeben $\rightarrow$ Isolation, bspw.\ mit PID-Namespace
+                \item TCP-Timeouts $\rightarrow$ Vergrößerung des Fensters, Manipulation des Images
+            \end{itemize}
+        \item Performance?
+    \end{itemize}
 \end{frame}
 
 \begin{frame}
     \frametitle{CRIU: Performance}
+    \begin{itemize}
+        \item Performance, insb. $T_{Restore}$ von hoher Relevanz für C/R-Fuzzing
+    \end{itemize}
+
+\begin{tabular}{| l | l  l  l  l  l | l |}
+    \toprule
+    Iterationen & $1$byte & $10^2$byte & $10^4$byte & $10^6$byte & $10^8$byte & TCP \\
+    \midrule
+    10 & 0.292s & 0.290s & 0.292s & 0.301s & 0.627s & 0.982s \\
+    50 & 1.269s & 1.269s & 1.256s & 1.298s & 2.332s & 4.615s \\
+    100 & 2.459s & 2.494s & 2.477s & 2.558s & 4.482s & 9.170s \\
+    500 & 12.205s & 12.228s & 12.250s & 12.648s & 21.564s & 45.541s \\
+    \midrule
+    $T_{Restore}$ & 0.024s & 0.024s & 0.024s & 0.025s & 0.043s & 0.091s \\
+    \bottomrule
+\end{tabular}
+    \begin{itemize}
+        \item insb. $T_{Restore}$ $\geq 24ms$ (auf diesem Laptop)
+        \item Linux-CR erreicht Restore-Zeiten von $\leq 1ms$
+    \end{itemize}
+
 \end{frame}
 
 \section{C/R-Fuzzing: Implementierung}
