@@ -1,0 +1,341 @@
+\documentclass[handout]{beamer}
+%\usepackage[german]{babel}
+%\usepackage[utf8x]{inputenc}
+\usepackage[ngerman]{babel}
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage{tikz}
+\lstset{
+	frame=single,
+	breaklines=true
+}
+
+\usetikzlibrary{arrows,automata}
+
+
+\definecolor{verylightgray}{rgb}{0.9,0.9,0.9}
+
+\usetheme{Madrid}
+% Other valid themes
+%   Antibes, Bergen, Berkeley, Berlin, Copenhagen
+%   Darmstadt, Dresden, Frankfurt, Goettingen, Hannover
+%   Ilmenau, JuanLesPins, Luebeck, Madrid, Malmoe
+%   Marburg, Montpellier, PaloAlto, Pittsburgh, Rochester
+%   Singapore, Szeged, Warsaw, boxes, default
+
+%möglich: Antibes, Darmstadt, Frankfurt, Madrid, Montpellier, Singapore
+
+\usecolortheme{dove}
+% Other valid color schemes
+%    albatross, beaver, beetle, crane, dolphin
+%    dove, fly, lily, orchid, rose, seagull
+%    seahorse, whale and the one and only wolverine
+
+%möglich: albatross, beaver, dove, whale
+
+\title[Checkpoint/Restore in Fuzzing]{Checkpoint/Restore in Fuzzing}
+\subtitle{Begleitseminar Bachelorarbeit}
+\author[Klaassen]{Malte Klaassen}
+%\institute[Kurzform]{Institut}
+\date{2018-12-14}
+
+\begin{document}
+
+\begin{frame}%1
+\titlepage
+\end{frame}
+
+\begin{frame}%2
+	\frametitle{Inhaltsverzeichnis}
+	\tableofcontents%[pausesections]
+\end{frame}
+
+\section{Fuzzing}
+\begin{frame}
+    \frametitle{Fuzzing}
+    \begin{itemize}
+        \item Testen mit (zufälligen) computergenerierten Inputs
+        \item insb.\ zum Abdecken von Grenzfällen etc.
+        \item Überwachung der Ausführung auf unerwünschtes Verhalten
+        \item Verschiedene Strategien, bspw.\ zur Erzeugung der Inputs
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{Fuzzing: Probleme/Beschränkungen}
+    \begin{itemize}
+        \item Effektivität von Fuzzing beruht auf hohem Durchsatz
+        \item Zerlegung komplexer Anwendungen in simple Subsysteme \begin{itemize}
+                \item Zusätzlicher Aufwand für mehr Fuzz-Targets
+                \item Benötigt Kenntnisse über Struktur der Anwendung
+        \end{itemize}
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{Fuzzing: Fuzzing-Engines}
+    \begin{itemize}
+        \item libFuzzer
+            \begin{itemize}
+                \item Ziel: Leicht zu nutzende, mächtige Fuzzing-Engine
+                \item Integration mit LLVM/clang
+                \item Nutzt clang-Compilerfeatures (Code-Coverage, Sanitizer, Fuzzing-Engine)
+            \end{itemize}
+        \item afl
+            \begin{itemize}
+                \item Ziel: Mächtige, effiziente Fuzzing-Engine
+                \item Nutzt einige Compilerfeatures (insb. Code-Coverage, einige Sanitizer)
+                \item Benötigt eigene Fuzzing-Binary, spezielle Compiler-Versionen, \dots
+            \end{itemize}
+    \end{itemize}
+\end{frame}
+
+\section{Checkpoint/Restore}
+\begin{frame}
+    \frametitle{Checkpoint/Restore}
+    \begin{itemize}
+        \item C/R : Speichern des Zustandes einer Anwendung zur späteren Wiederherstellung
+        \item Debugging, Laufzeitoptimierung, Lastoptimierung, Migration
+        \item Userspace vs. Kernel vs. Container
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{C/R: Userspace}
+    \begin{itemize}
+        \item Checkpointen einer Anwendung durch eine Userspace-Anwendungen
+        \item Sammeln/Wiederherstellen der nötigen Informationen durch:
+            \begin{itemize}
+                \item Lesen in bspw.\ \texttt{/proc/}
+                \item Intercept von System- und Library-Calls (bspw.\ DMTCP)
+                \item Nutzung von OS-Features bspw.\ für Speicherinhalte (BLCR, CRIU)
+            \end{itemize}
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{C/R: Kernel}
+    \begin{itemize}
+        \item Checkpointen einer Anwendungen durch den Kernel
+        \item Kernel hat direkten Zugriff auf alle benötigten Informationen
+        \item Benötigt Custom Kernel (Legacy OpenVZ C/R) oder Kernelpatches (Linux-CR)
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{C/R: Container}
+    \begin{itemize}
+        \item Container oder Virtuelle Maschinen als zu checkpointene Anwendung
+        \item Integration existierender C/R-Tools in Containerverwaltungssystem (Docker: CRIU)
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{C/R-Tools: Capabilities}
+    \begin{itemize}
+        \item Verschiedene C/R-Tools können verschiedene Features checkpointen und wiederherstellen
+            \begin{itemize}
+                \item Threads?
+                \item Mehrere Prozesse?
+                \item Netzwerksockets? In welchen Zuständen?
+                \item PIDs? Namespaces?
+            \end{itemize}
+        \item C/R-Tools arbeiten primär auf Prozessen, nicht Threads
+    \end{itemize}
+\end{frame}
+
+\section{C/R-Fuzzing: Ansätze}
+
+\begin{frame}
+    \frametitle{C/R-Fuzzing: Ansätze}
+    \begin{itemize}
+        \item Ziel: Lösung von Fuzzing-Problemen mittels C/R-Mechanismen
+            \begin{itemize}
+                \item Laufzeitoverhead durch wiederholte Setups
+                \item Notwendigkeit der Zerlegung in Subsysteme
+            \end{itemize}
+        \item Frage: Wo wird C/R-Funktionalität implementiert?
+            \begin{itemize}
+                \item Im Fuzzer, transparent gegenüber dem Fuzz-Target
+                \item Im Fuzz-Target, ohne C/R-Support des Fuzzers
+            \end{itemize}
+        \item Frage: Was für C/R-Funktionalität?
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{C/R-Fuzzing: Bisherige Ansätze}
+    \begin{itemize}
+        \item afl Forkserver
+            \begin{itemize}
+                \item Einfrieren des Fuzz-Target-Prozesses nach \texttt{execve}, Linking, Initialisierung (oder noch später mit \texttt{\_\_AFL\_INIT();})
+                \item Fuzzing findet auf Copy-on-Write-fork dieses Prozesses statt
+                \item Forkserver muss vor Nutzung von Childprocesses, Threads, Filedeskriptoren, \dots aufgesetzt werden
+                    $\rightarrow$ Reduktion des Setupoverheads aber nur bei simplem Overhead
+            \end{itemize}
+        \item Mit mächtigen C/R-Tools: Keine (bekannt)
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{C/R-Fuzzing: "Naiver" C/R-Ansatz}
+    \begin{itemize}
+        \item Ähnlich zu afl Forkserver
+        \item Zerlege Fuzz-Target in Setup und eigentlichen Test
+        \item Führe das Setup einmal aus, checkpointe den Prozess, steige für weitere Ausführungen an dem Checkpoint wieder ein
+        \item Implementiert durch den Fuzzer mit entsprechendem Breakpoint in Fuzz-Target oder implementiert im Fuzz-Target selbst
+        \item Laufzeitgewinn pro Iteration:
+            \begin{equation}
+                \begin{split}
+                    \frac{T_{Non-C/R}(n) - T_{C/R}(n)}{n} &= \frac{(n-1) T_{Setup} - T_{Checkpoint} - n T_{Restore}}{n} \\
+                    &=_{n \to \infty} T_{Setup} - T_{Restore}
+                \end{split}
+            \end{equation}
+    \end{itemize}
+\end{frame}
+
+
+\begin{frame}
+    \frametitle{Naiver C/R-Ansatz: C/R-Fuzzer}
+    \begin{itemize}
+        \item Mächtigere Variante des afl Forkservers
+        \item Inputübergabe muss nach dem Checkpoint passieren
+        \item Welche Codesegmente in den Setup-Teil verlagert werden können wird durch das C/R-Tool bedingt
+        \item $T_{Restore}$ muss klein sein damit ein Laufzeitgewinn vorliegt
+        \item Parallel Fuzzing? Timeouts?
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{Naiver C/R-Ansatz: C/R-Fuzz-Target}
+    \begin{itemize}
+        \item Gleiche Überlegungen wie beim C/R-Fuzzer, zusätzlich:
+        \item Kompatibilität von C/R-Tool und Fuzzer muss gewährleistet sein
+            \begin{itemize}
+                \item Genutzte Sanitizer, Fuzzing von Multi-Process-Anwendungen, Restore-In-Place, \dots
+            \end{itemize}
+        \item Übergabe des Inputs, Speicherung des Zustands, \dots
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{C/R-Fuzzing: Exploration eines Zustandsgraphen}
+    \begin{itemize}
+        \item Ziel: Effizientes Fuzzing einer komplexen Anwendung mit mehrstufigen Eingaben und wohldefiniertem Zustandsgraphen
+            \begin{itemize}
+                \item Bspw. Implementierung eines Netzwerkprotokolls
+            \end{itemize}
+        \item Ansatz: Exploration des Zustandsgraphen durch Anwendung von neuen Inputs auf bereits bekannte Zustände
+        \item Checkpointing der Anwendung bei neu gefundenen Zuständen $\rightarrow$ Ausführung mit neuen Inputs kann direkt dort fortgeführt werden
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{C/R-Fuzzing: Exploration eines Zustandsgraphen}
+    \begin{figure}[h]
+        \begin{center}
+            \begin{tikzpicture}[->,>=stealth',shorten >=1pt,auto,node distance=2.8cm,
+                    semithick]
+                \tikzstyle{every state}=[fill=lightgray,draw=none,text=black]
+                
+                \node[initial,state] (A)                    {$s_0$};
+                \node[state]         (B) [below left of=A] {$s_1$};
+                \node[state]         (D) [below right of=A] {$s_2$};
+                \node[state]         (C) [below of=B] {$s_3$};
+                \node[state]         (E) [right of=A]       {$?$};
+                \node[state]         (F) [below left of=B]       {$?$};
+                \node[state]         (G) [below right of=D]       {$?$};
+                \node[state]         (H) [right of=C]       {$?$};
+                    
+                
+                \path (A) edge              node {$i_1$} (B)
+                          edge              node {$i_2, i_4$} (D)
+                          edge [bend left, dotted]  node {$i*$}  (E)
+                      (B) edge              node {$i_3$} (C)
+                          edge [bend right, dotted]  node {$i*$}  (F)
+                      (C) edge [bend right, dotted] node {$i*$}  (H)
+                      (D) edge [bend left, dotted] node {$i*$}  (G);
+            \end{tikzpicture}
+        \end{center}
+        \caption{Zustandsübergangsexploration mit Input $i*$}
+    \end{figure}
+\end{frame}
+
+\begin{frame}
+    \frametitle{C/R-Fuzzing: Exploration eines Zustandsgraphen}
+    \begin{itemize}
+        \item Woran erkennt man einen Zustand?
+        \item Übergabe des Inputs?
+        \item Welche Mittel stehen zur geführten Generierungen von Inputs zur Verfügung?
+        \item Bei einer Implemetierung des C/R im Fuzz-Target:
+            \begin{itemize}
+                \item Persistente Speicherung der Zustände
+                \item Anwendung der Inputs auf verschiedene Serverzustände?
+                \item Wie bei dem naiven Ansatz: Kompatibilitätsprobleme
+            \end{itemize}
+    \end{itemize}
+\end{frame}
+
+\section{CRIU}
+\begin{frame}
+    \frametitle{CRIU}
+    \begin{itemize}
+        \item
+    \end{itemize}
+\end{frame}
+
+\begin{frame}
+    \frametitle{CRIU: Funktionsweise}
+\end{frame}
+
+\begin{frame}
+    \frametitle{CRIU: Performance}
+\end{frame}
+
+\section{C/R-Fuzzing: Implementierung}
+\begin{frame}
+    \frametitle{C/R-Fuzzing: Implementierungsversuche}
+\end{frame}
+
+\begin{frame}
+    \frametitle{libfuzzer + CRIU}
+\end{frame}
+
+\begin{frame}
+    \frametitle{afl + CRIU}
+\end{frame}
+
+\section{Ergebnisse und Ausblick}
+
+\begin{frame}
+    \frametitle{Ergebnisse}
+\end{frame}
+
+\begin{frame}
+    \frametitle{Ausblick}
+\end{frame}
+
+\begin{frame}
+
+\end{frame}
+
+\begin{thebibliography}{}
+\bibitem[1]{1}
+    Lesser-known features of afl-fuzz; Michał Zalewski \url{https://lcamtuf.blogspot.com/2015/05/lesser-known-features-of-afl-fuzz.html}
+\end{thebibliography}
+
+
+
+\end{document}
+
+%%% OLD %%%
+
+%\subsection{sub}
+
+%\begin{frame}[c]%24
+%\frametitle{Vielen Dank für Ihre Aufmerksamkeit}
+%\framesubtitle{Untertitel}
+%\begin{itemize}
+%\item Ein Item
+%\end{itemize}
+%\end{frame}
