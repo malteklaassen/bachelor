@@ -372,20 +372,36 @@
 \section{C/R-Fuzzing: Implementierung}
 \begin{frame}
     \frametitle{C/R-Fuzzing: Implementierungsversuche}
+    \begin{itemize}
+        \item In Ermangelung mächtiger C/R-Fuzzer: Können wir C/R-Fuzz-Targets implementieren?
+        \item Betrachten libFuzzer/afl und CRIU
+        \item Versuch der Implemetierung des Naiven C/R-Fuzzing-Ansatzes
+        \item Unerfolgreich, aufgrund einer Reihe von Problemen
+    \end{itemize}
 \end{frame}
 
 \begin{frame}
-    \frametitle{libfuzzer + CRIU}
+    \frametitle{libFuzzer + CRIU}
+    \begin{itemize}
+        \item CRIU ist inkompatibel mit einer Nutzung von ASan
+        \item CRIU setzt Wiederherstellung unter gleicher PID vorraus - libFuzzer verhindert dies
+        \item libFuzzer besitzt nur extrem eingeschränkten Multi-Process-Support, ein wiederherstellen in-place wäre nötig
+    \end{itemize}
 \end{frame}
 
 \begin{frame}
     \frametitle{afl + CRIU}
+    \begin{itemize}
+        \item Da durch den Forkserver Shared Memory mit anderen Prozessen vorliegt scheitert das Checkpointing
+        \item Wie bei libFuzzer: Fehlender/eingeschränkter Multi-Process-Support, ASan Inkompatibilität
+    \end{itemize}
 \end{frame}
 
 \section{Ergebnisse und Ausblick}
 
 \begin{frame}
     \frametitle{Ergebnisse}
+
 \end{frame}
 
 \begin{frame}
